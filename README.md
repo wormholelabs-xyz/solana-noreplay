@@ -8,4 +8,3 @@ use case: emitter chain (u16), emitter address (32 bytes), sequence number (u64)
 
 TODO:
 - litesvm proptest
-- build/test in docker (need x86 platform because solana still doesn't ship aarch64 linux bins)
