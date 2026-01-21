@@ -1,0 +1,8 @@
+# Claude Required
+registry.npmjs.org
+api.anthropic.com
+sentry.io
+statsig.anthropic.com
+statsig.com
+
+# Repo Specific
