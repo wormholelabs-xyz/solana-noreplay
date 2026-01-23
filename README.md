@@ -34,8 +34,8 @@ In implementations, `BUCKET_SIZE` is typically chosen as a power of two so this 
 
 Each bucket is represented by a PDA seeded by:
 
-- the **calling program’s address**
-- the caller-supplied `namespace`
+- the **authority** (must be a signer; in CPI contexts, typically a PDA of the calling program)
+- the caller-supplied `namespace` (split into 32-byte chunks if longer than 32 bytes)
 - `bucket_index` (little-endian `u64`)
 
 The PDA stores a bitmap of `BUCKET_SIZE / 8` bytes. A sequence is considered *already processed* if and only if its corresponding bit is set.
@@ -56,10 +56,14 @@ A natural namespace for VAAs is:
 namespace = chain_id (u16, LE) || emitter_address (32 bytes)
 ```
 
+This 34-byte namespace is automatically split into two seed components:
+- chunk 0: bytes 0–31 (32 bytes)
+- chunk 1: bytes 32–33 (2 bytes)
+
 The VAA `sequence` field is monotonic per emitter. Using this scheme:
 
 - `bucket_index = sequence / BUCKET_SIZE`
-- PDA seeds: `[calling_program_id, namespace, bucket_index_le]`
+- PDA seeds: `[authority, ns_chunk_0, ns_chunk_1, bucket_index_le]`
 
 Consecutive VAAs from the same emitter therefore share bucket accounts, amortising storage costs across many messages.
 
@@ -74,17 +78,31 @@ For sufficiently large buckets, the marginal cost per message approaches a singl
 
 The NoReplay program is intended to be invoked via CPI by other programs.
 
-The caller provides:
+### Accounts
 
-- `namespace: &[u8]` — deterministic, application-specific identifier
+1. `[signer, writable]` **Payer** — pays for PDA creation if needed
+2. `[signer]` **Authority** — goes into PDA seeds; must sign to prevent DOS attacks
+3. `[writable]` **Bitmap PDA** — the bucket account (derived from authority, namespace, bucket_index)
+4. `[]` **System program**
+
+In CPI contexts, the **authority** is typically a PDA of the calling program (which the calling program can sign for). This ensures that only the calling program can mark sequences as used within its namespace.
+
+### Instruction data
+
+- `namespace: &[u8]` — deterministic, application-specific identifier (max 64 bytes)
 - `sequence: u64`
-- the expected bucket PDA (derived from the same seeds)
+
+Format: `[namespace_len: u16 LE][namespace: variable][sequence: u64 LE]`
+
+### Program behavior
 
 The NoReplay program:
 
-1. Computes `(bucket_index, bit_index)` from `sequence`
-2. Initialises the bucket PDA if it does not yet exist (or takes ownership of a system-owned pre-funded account)
-3. Checks the bitmap at `bit_index`
+1. Verifies the authority is a signer
+2. Computes `(bucket_index, bit_index)` from `sequence`
+3. Derives PDA from `[authority, ns_chunk_0, ..., ns_chunk_n, bucket_index_le]`
+4. Initialises the bucket PDA if it does not yet exist (or takes ownership of a system-owned pre-funded account)
+5. Checks the bitmap at `bit_index`
    - if the bit is set: reject as a replay
    - otherwise: set the bit and succeed
 
@@ -92,9 +110,10 @@ The NoReplay program:
 
 - `BUCKET_SIZE` should be a power of two so bit arithmetic is cheap.
 - Only `bucket_index` is included in the PDA derivation; _never_ include `bit_index`.
+- The **authority must be a signer** to prevent DOS attacks where adversaries mark sequences as used for other users.
 - `namespace` should be collision-resistant for your application:
   - include domain separators, chain IDs, contract addresses, emitter IDs, etc. as appropriate
-  - respect Solana’s seed length limits (split into multiple seed components if needed)
+  - namespaces longer than 32 bytes are automatically split into 32-byte chunks (max 64 bytes total = 2 chunks)
 
 This design deliberately separates *how replay protection is implemented* from *how messages are identified*, allowing different protocols to reuse the same NoReplay primitive with their own namespace and sequencing schemes.
 

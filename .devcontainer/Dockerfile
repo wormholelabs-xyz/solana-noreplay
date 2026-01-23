@@ -37,13 +37,29 @@ FROM solana-dev AS test
 
 WORKDIR /workspace
 
-COPY --chown=node:node program/ program/
+# Copy manifests first for dependency caching
 COPY --chown=node:node Cargo.toml Cargo.lock* ./
+COPY --chown=node:node program/Cargo.toml program/Cargo.toml
+COPY --chown=node:node tests/Cargo.toml tests/Cargo.toml
 
-RUN cargo build-sbf
+# Create dummy source files to build dependencies
+RUN mkdir -p program/src tests/src && \
+    echo "pub fn dummy() {}" > program/src/lib.rs && \
+    echo "pub fn dummy() {}" > tests/src/lib.rs
+
+# Build dependencies (this layer is cached until Cargo.toml changes)
+RUN cargo build-sbf --manifest-path program/Cargo.toml || true
+RUN cargo build --manifest-path tests/Cargo.toml || true
+
+# Copy actual source code
+COPY --chown=node:node program/src program/src
+COPY --chown=node:node tests/src tests/src
+
+# Build the real program
+RUN cargo build-sbf --manifest-path program/Cargo.toml
 
 # Run tests
-CMD ["cargo", "test-sbf"]
+CMD ["cargo", "test", "--manifest-path", "tests/Cargo.toml"]
 
 # =============================================================================
 # Development stage - adds Claude and other dev tools

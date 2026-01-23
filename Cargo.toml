@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["program"]
+members = ["program", "tests"]
+
+# Note: `cargo build` will fail for program (uses Solana syscalls)
+# Build program with: cargo build-sbf --manifest-path program/Cargo.toml
