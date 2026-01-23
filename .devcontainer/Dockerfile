@@ -30,36 +30,72 @@ ARG SOLANA_VERSION=3.1.7
 RUN sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
 ENV PATH="/home/node/.local/share/solana/install/active_release/bin:$PATH"
 
+# Pre-warm Solana SBF build cache
+RUN mkdir -p /tmp/sbf-warmup/src
+
+RUN cat >/tmp/sbf-warmup/Cargo.toml <<'EOF'
+[package]
+name = "sbf-warmup"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+EOF
+
+RUN echo > /tmp/sbf-warmup/src/lib.rs
+
+# Pre-warm Solana SBF toolchain
+RUN --mount=type=cache,target=/home/node/.cache/solana,uid=1000,gid=1000 \
+    cd /tmp/sbf-warmup && \
+    cargo build-sbf && \
+    rm -rf /tmp/sbf-warmup
+
 # =============================================================================
-# Test stage - builds and tests the program
+# Build stage - builds the Solana program
+# =============================================================================
+FROM solana-dev AS solana-build
+
+WORKDIR /workspace
+
+COPY --chown=node:node Cargo.toml Cargo.lock* ./
+COPY --chown=node:node program program
+COPY --chown=node:node tests/Cargo.toml tests/Cargo.toml
+
+# Dummy tests source to satisfy workspace
+RUN mkdir -p tests/src && echo > tests/src/lib.rs
+
+RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
+    --mount=type=cache,target=/home/node/.cache/solana,uid=1000,gid=1000 \
+    --mount=type=cache,target=/workspace/target,uid=1000,gid=1000 \
+    cargo build-sbf --manifest-path program/Cargo.toml && \
+    mkdir -p /workspace/deploy && \
+    cp /workspace/target/deploy/*.so /workspace/deploy/
+
+# =============================================================================
+# Test stage - runs tests against the built program
 # =============================================================================
 FROM solana-dev AS test
 
 WORKDIR /workspace
 
-# Copy manifests first for dependency caching
+# Copy manifests and test code
 COPY --chown=node:node Cargo.toml Cargo.lock* ./
 COPY --chown=node:node program/Cargo.toml program/Cargo.toml
-COPY --chown=node:node tests/Cargo.toml tests/Cargo.toml
+COPY --chown=node:node tests tests
 
-# Create dummy source files to build dependencies
-RUN mkdir -p program/src tests/src && \
-    echo "pub fn dummy() {}" > program/src/lib.rs && \
-    echo "pub fn dummy() {}" > tests/src/lib.rs
+# Create minimal program source (tests only need the .so, not the source)
+RUN mkdir -p program/src && echo > program/src/lib.rs
 
-# Build dependencies (this layer is cached until Cargo.toml changes)
-RUN cargo build-sbf --manifest-path program/Cargo.toml || true
-RUN cargo build --manifest-path tests/Cargo.toml || true
+# Copy built program from build stage
+COPY --from=solana-build --chown=node:node /workspace/deploy target/deploy
 
-# Copy actual source code
-COPY --chown=node:node program/src program/src
-COPY --chown=node:node tests/src tests/src
-
-# Build the real program
-RUN cargo build-sbf --manifest-path program/Cargo.toml
-
-# TODO: move this to a separate stage and have a way to export binaries from the build stage
-RUN cargo test --manifest-path tests/Cargo.toml
+# Run tests
+RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
+    --mount=type=cache,target=/workspace/target/debug,uid=1000,gid=1000 \
+    cargo test --manifest-path tests/Cargo.toml
 
 # =============================================================================
 # Development stage - adds Claude and other dev tools
