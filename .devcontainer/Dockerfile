@@ -58,8 +58,8 @@ COPY --chown=node:node tests/src tests/src
 # Build the real program
 RUN cargo build-sbf --manifest-path program/Cargo.toml
 
-# Run tests
-CMD ["cargo", "test", "--manifest-path", "tests/Cargo.toml"]
+# TODO: move this to a separate stage and have a way to export binaries from the build stage
+RUN cargo test --manifest-path tests/Cargo.toml
 
 # =============================================================================
 # Development stage - adds Claude and other dev tools

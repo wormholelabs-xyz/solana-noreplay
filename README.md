@@ -143,3 +143,5 @@ The cost of a bucket (128 bytes bitmap + 128 bytes overhead) is ~$0.178.
 - **10% hit rate**: ~51x cheaper (≈ $0.00174 / msg)
 - **1% hit rate**: ~5.1x cheaper (≈ $0.0174 / msg)
 - **0.1% hit rate**: ~0.51x (≈ $0.174 / msg; worse than one-PDA-per-message)
+
+TODO: permissionless bucket init (no need for CPI) + store bump in the account. then we have tight CI bounds on bit setting if needed.
