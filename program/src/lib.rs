@@ -32,7 +32,7 @@ const MAX_NAMESPACE_LEN: usize = 64;
 const SEED_CHUNK_SIZE: usize = 32;
 
 /// Create and assign a PDA with the given space.
-/// Works for both new accounts (0 lamports) and pre-funded accounts.
+/// Uses single CPI for new accounts, 3 CPIs for pre-funded accounts.
 fn create_pda<'a>(
     payer: &'a AccountView,
     pda: &'a AccountView,
@@ -44,63 +44,101 @@ fn create_pda<'a>(
     let required_lamports = rent.try_minimum_balance(space as usize)?;
     let current_lamports = pda.lamports();
 
-    // Transfer lamports if needed
-    if current_lamports < required_lamports {
-        let mut ix_data = [0u8; 12];
-        ix_data[0..4].copy_from_slice(&TRANSFER_IX.to_le_bytes());
-        ix_data[4..12].copy_from_slice(&(required_lamports - current_lamports).to_le_bytes());
+    if current_lamports == 0 {
+        // New account: single CreateAccount CPI (most efficient)
+        let mut ix_data = [0u8; 52];
+        // instruction index 0 (CreateAccount) - already zeros
+        ix_data[4..12].copy_from_slice(&required_lamports.to_le_bytes());
+        ix_data[12..20].copy_from_slice(&space.to_le_bytes());
+        ix_data[20..52].copy_from_slice(owner.as_ref());
 
         invoke_signed::<2>(
             &InstructionView {
                 program_id: &SYSTEM_PROGRAM_ID,
                 accounts: &[
                     InstructionAccount::writable_signer(payer.address()),
-                    InstructionAccount::writable(pda.address()),
+                    InstructionAccount::writable_signer(pda.address()),
                 ],
                 data: &ix_data,
             },
             &[payer, pda],
-            &[],
-        )?;
-    }
-
-    // Allocate space
-    {
-        let mut ix_data = [0u8; 12];
-        ix_data[0..4].copy_from_slice(&ALLOCATE_IX.to_le_bytes());
-        ix_data[4..12].copy_from_slice(&space.to_le_bytes());
-
-        invoke_signed::<1>(
-            &InstructionView {
-                program_id: &SYSTEM_PROGRAM_ID,
-                accounts: &[InstructionAccount::writable_signer(pda.address())],
-                data: &ix_data,
-            },
-            &[pda],
             signers,
         )?;
-    }
+    } else {
+        // Pre-funded account: need 3 separate CPIs
 
-    // Assign to owner
-    {
-        let mut ix_data = [0u8; 36];
-        ix_data[0..4].copy_from_slice(&ASSIGN_IX.to_le_bytes());
-        ix_data[4..36].copy_from_slice(owner.as_ref());
+        // Transfer additional lamports if needed
+        if current_lamports < required_lamports {
+            let mut ix_data = [0u8; 12];
+            ix_data[0..4].copy_from_slice(&TRANSFER_IX.to_le_bytes());
+            ix_data[4..12].copy_from_slice(&(required_lamports - current_lamports).to_le_bytes());
 
-        invoke_signed::<1>(
-            &InstructionView {
-                program_id: &SYSTEM_PROGRAM_ID,
-                accounts: &[InstructionAccount::writable_signer(pda.address())],
-                data: &ix_data,
-            },
-            &[pda],
-            signers,
-        )?;
+            invoke_signed::<2>(
+                &InstructionView {
+                    program_id: &SYSTEM_PROGRAM_ID,
+                    accounts: &[
+                        InstructionAccount::writable_signer(payer.address()),
+                        InstructionAccount::writable(pda.address()),
+                    ],
+                    data: &ix_data,
+                },
+                &[payer, pda],
+                &[],
+            )?;
+        }
+
+        // Allocate space
+        {
+            let mut ix_data = [0u8; 12];
+            ix_data[0..4].copy_from_slice(&ALLOCATE_IX.to_le_bytes());
+            ix_data[4..12].copy_from_slice(&space.to_le_bytes());
+
+            invoke_signed::<1>(
+                &InstructionView {
+                    program_id: &SYSTEM_PROGRAM_ID,
+                    accounts: &[InstructionAccount::writable_signer(pda.address())],
+                    data: &ix_data,
+                },
+                &[pda],
+                signers,
+            )?;
+        }
+
+        // Assign to owner
+        {
+            let mut ix_data = [0u8; 36];
+            ix_data[0..4].copy_from_slice(&ASSIGN_IX.to_le_bytes());
+            ix_data[4..36].copy_from_slice(owner.as_ref());
+
+            invoke_signed::<1>(
+                &InstructionView {
+                    program_id: &SYSTEM_PROGRAM_ID,
+                    accounts: &[InstructionAccount::writable_signer(pda.address())],
+                    data: &ix_data,
+                },
+                &[pda],
+                signers,
+            )?;
+        }
     }
 
     Ok(())
 }
 
+/// Marks a sequence number as used for replay protection.
+///
+/// # Accounts
+/// 0. `[writable, signer]` payer - Pays for PDA creation if needed
+/// 1. `[signer]` authority - Owner of the sequence space (included in PDA seeds)
+/// 2. `[writable]` bitmap_pda - PDA storing the bitmap for this bucket
+/// 3. `[]` system_program - System program for PDA creation
+///
+/// # Instruction Data
+/// | Offset | Size | Description |
+/// |--------|------|-------------|
+/// | 0      | 2    | namespace_len (u16 LE) |
+/// | 2      | var  | namespace (0-64 bytes) |
+/// | 2+len  | 8    | sequence (u64 LE) |
 fn process_instruction(
     program_id: &Address,
     accounts: &[AccountView],
