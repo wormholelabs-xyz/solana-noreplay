@@ -65,7 +65,9 @@ COPY --chown=node:node program program
 COPY --chown=node:node tests/Cargo.toml tests/Cargo.toml
 
 # Dummy tests source to satisfy workspace
-RUN mkdir -p tests/src && echo > tests/src/lib.rs
+RUN mkdir -p tests/src tests/benches && \
+    echo > tests/src/lib.rs && \
+    echo 'fn main() {}' > tests/benches/compute_units.rs
 
 RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
     --mount=type=cache,target=/home/node/.cache/solana,uid=1000,gid=1000 \
