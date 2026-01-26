@@ -12,6 +12,10 @@ use solana_sdk::{
 
 const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
 
+/// Instruction discriminators (must match program)
+const IX_CREATE_BITMAP: u8 = 0;
+const IX_MARK_USED: u8 = 1;
+
 /// Bits per bitmap bucket (must match program)
 const BITS_PER_BUCKET: u64 = 256;
 
@@ -45,6 +49,38 @@ fn derive_bitmap_pda(authority: &Pubkey, namespace: &[u8], sequence: u64) -> (Pu
     Pubkey::find_program_address(&seeds, &PROGRAM_ID)
 }
 
+/// Build instruction data for namespace + sequence (shared by both instructions)
+fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) -> Vec<u8> {
+    let namespace_len = namespace.len() as u16;
+    let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
+    data.push(discriminator);
+    data.extend_from_slice(&namespace_len.to_le_bytes());
+    data.extend_from_slice(namespace);
+    data.extend_from_slice(&sequence.to_le_bytes());
+    data
+}
+
+/// Build instruction to create a bitmap PDA permissionlessly
+fn create_bitmap_instruction(
+    payer: &Pubkey,
+    authority: &Pubkey,
+    namespace: &[u8],
+    sequence: u64,
+) -> Instruction {
+    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
+
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*payer, true),               // payer, signer
+            AccountMeta::new_readonly(*authority, false), // authority, NOT a signer
+            AccountMeta::new(pda, false),                 // bitmap PDA
+            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+        ],
+        data: build_instruction_data(IX_CREATE_BITMAP, namespace, sequence),
+    }
+}
+
 /// Build instruction to mark a sequence number as used
 fn mark_used_instruction(
     payer: &Pubkey,
@@ -54,13 +90,6 @@ fn mark_used_instruction(
 ) -> Instruction {
     let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
 
-    // Build instruction data: [namespace_len: u16 LE][namespace][sequence: u64 LE]
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(2 + namespace.len() + 8);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
-
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -69,7 +98,7 @@ fn mark_used_instruction(
             AccountMeta::new(pda, false),                // bitmap PDA
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
-        data,
+        data: build_instruction_data(IX_MARK_USED, namespace, sequence),
     }
 }
 
@@ -568,7 +597,8 @@ fn namespace_too_long_fails() {
 
     // Manually build instruction data without deriving PDA (since oversized namespace would panic)
     let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(2 + namespace.len() + 8);
+    let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
+    data.push(IX_MARK_USED);
     data.extend_from_slice(&namespace_len.to_le_bytes());
     data.extend_from_slice(&namespace);
     data.extend_from_slice(&sequence.to_le_bytes());
@@ -613,12 +643,6 @@ fn authority_must_be_signer() {
     // Create instruction but mark authority as non-signer
     let (pda, _bump) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
 
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(2 + namespace.len() + 8);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
-
     let ix = Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
@@ -627,7 +651,7 @@ fn authority_must_be_signer() {
             AccountMeta::new(pda, false),           // bitmap PDA
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
-        data,
+        data: build_instruction_data(IX_MARK_USED, namespace, sequence),
     };
 
     let blockhash = svm.latest_blockhash();
@@ -654,24 +678,7 @@ fn separate_payer_and_authority_works() {
     let namespace = b"test";
     let sequence = 1u64;
 
-    let (pda, _bump) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
-
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(2 + namespace.len() + 8);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
-
-    let ix = Instruction {
-        program_id: PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(payer.pubkey(), true), // payer, signer
-            AccountMeta::new_readonly(authority.pubkey(), true), // authority, signer
-            AccountMeta::new(pda, false),           // bitmap PDA
-            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
-        ],
-        data,
-    };
+    let ix = mark_used_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
 
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
@@ -684,6 +691,166 @@ fn separate_payer_and_authority_works() {
     assert!(
         result.is_ok(),
         "Should work with separate payer and authority: {:?}",
+        result
+    );
+}
+
+// ============================================================================
+// CreateBitmap (permissionless) tests
+// ============================================================================
+
+#[test]
+fn create_bitmap_permissionless() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(PROGRAM_ID, &load_program());
+
+    let payer = Keypair::new();
+    let authority = Keypair::new(); // Authority does NOT sign
+    svm.airdrop(&payer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+    let namespace = b"test";
+    let sequence = 42u64;
+    let (pda, _) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
+
+    // Create bitmap without authority signature
+    let ix = create_bitmap_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&payer.pubkey()),
+        &[&payer], // Only payer signs
+        blockhash,
+    );
+    let result = svm.send_transaction(tx);
+    assert!(
+        result.is_ok(),
+        "CreateBitmap should work without authority signature: {:?}",
+        result
+    );
+
+    // Verify PDA was created with correct balance
+    let pda_balance = svm.get_balance(&pda).unwrap();
+    assert_eq!(pda_balance, rent_for_bitmap());
+}
+
+#[test]
+fn create_bitmap_then_mark_used() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(PROGRAM_ID, &load_program());
+
+    let relayer = Keypair::new(); // Third party creates the bitmap
+    let authority = Keypair::new();
+    svm.airdrop(&relayer.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
+
+    let namespace = b"test";
+    let sequence = 123u64;
+
+    // Relayer creates bitmap permissionlessly
+    let ix = create_bitmap_instruction(&relayer.pubkey(), &authority.pubkey(), namespace, sequence);
+    let blockhash = svm.latest_blockhash();
+    let tx =
+        Transaction::new_signed_with_payer(&[ix], Some(&relayer.pubkey()), &[&relayer], blockhash);
+    assert!(svm.send_transaction(tx).is_ok());
+
+    svm.expire_blockhash();
+
+    // Authority can now mark_used (no account creation needed)
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&authority.pubkey()),
+        &[&authority],
+        blockhash,
+    );
+    let result = svm.send_transaction(tx);
+    assert!(
+        result.is_ok(),
+        "MarkUsed should work on pre-created bitmap: {:?}",
+        result
+    );
+}
+
+#[test]
+fn create_bitmap_idempotent() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(PROGRAM_ID, &load_program());
+
+    let payer = Keypair::new();
+    let authority = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+    let namespace = b"test";
+    let sequence = 42u64;
+
+    // First create
+    let ix = create_bitmap_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], blockhash);
+    assert!(svm.send_transaction(tx).is_ok());
+
+    svm.expire_blockhash();
+
+    // Second create should succeed (idempotent - account already exists)
+    let ix = create_bitmap_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], blockhash);
+    let result = svm.send_transaction(tx);
+    assert!(
+        result.is_ok(),
+        "CreateBitmap should be idempotent: {:?}",
+        result
+    );
+}
+
+#[test]
+fn create_bitmap_does_not_mark_used() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(PROGRAM_ID, &load_program());
+
+    let payer = Keypair::new();
+    let authority = Keypair::new();
+    svm.airdrop(&payer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
+
+    let namespace = b"test";
+    let sequence = 42u64;
+
+    // Create bitmap
+    let ix = create_bitmap_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], blockhash);
+    assert!(svm.send_transaction(tx).is_ok());
+
+    svm.expire_blockhash();
+
+    // MarkUsed should still succeed (bit not set by CreateBitmap)
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
+    let blockhash = svm.latest_blockhash();
+    let tx = Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&authority.pubkey()),
+        &[&authority],
+        blockhash,
+    );
+    let result = svm.send_transaction(tx);
+    assert!(
+        result.is_ok(),
+        "MarkUsed should succeed after CreateBitmap (bit not pre-set): {:?}",
         result
     );
 }

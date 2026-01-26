@@ -12,6 +12,10 @@ const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("1111111111111111111111
 const BITS_PER_BUCKET: u64 = 256;
 const SEED_CHUNK_SIZE: usize = 32;
 
+/// Instruction discriminators (must match program)
+const IX_CREATE_BITMAP: u8 = 0;
+const IX_MARK_USED: u8 = 1;
+
 fn program_id() -> Pubkey {
     "rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         .parse()
@@ -32,7 +36,17 @@ fn derive_bitmap_pda(authority: &Pubkey, namespace: &[u8], sequence: u64) -> (Pu
     Pubkey::find_program_address(&seeds, &program_id)
 }
 
-fn build_instruction(
+fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) -> Vec<u8> {
+    let namespace_len = namespace.len() as u16;
+    let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
+    data.push(discriminator);
+    data.extend_from_slice(&namespace_len.to_le_bytes());
+    data.extend_from_slice(namespace);
+    data.extend_from_slice(&sequence.to_le_bytes());
+    data
+}
+
+fn build_create_bitmap_instruction(
     payer: &Pubkey,
     authority: &Pubkey,
     namespace: &[u8],
@@ -41,21 +55,36 @@ fn build_instruction(
     let program_id = program_id();
     let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
 
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(2 + namespace.len() + 8);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
+    Instruction {
+        program_id,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new_readonly(*authority, false), // NOT a signer for CreateBitmap
+            AccountMeta::new(pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data: build_instruction_data(IX_CREATE_BITMAP, namespace, sequence),
+    }
+}
+
+fn build_mark_used_instruction(
+    payer: &Pubkey,
+    authority: &Pubkey,
+    namespace: &[u8],
+    sequence: u64,
+) -> Instruction {
+    let program_id = program_id();
+    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
 
     Instruction {
         program_id,
         accounts: vec![
             AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new_readonly(*authority, true), // signer for MarkUsed
             AccountMeta::new(pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
-        data,
+        data: build_instruction_data(IX_MARK_USED, namespace, sequence),
     }
 }
 
@@ -82,22 +111,27 @@ fn main() {
         acc
     };
 
-    // Scenario 1: New account (0 lamports) -> single CreateAccount CPI
+    // =========================================================================
+    // MarkUsed benchmarks
+    // =========================================================================
+
+    // MarkUsed: New account (0 lamports) -> single CreateAccount CPI
     let sequence_new = 1u64;
     let (pda_new, _) = derive_bitmap_pda(&authority, namespace, sequence_new);
-    let ix_new = build_instruction(&payer, &authority, namespace, sequence_new);
-    let accounts_new: Vec<(Pubkey, Account)> = vec![
+    let ix_mark_new = build_mark_used_instruction(&payer, &authority, namespace, sequence_new);
+    let accounts_mark_new: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
         (pda_new, Account::default()),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
-    // Scenario 2: Partially pre-funded -> Transfer + Allocate + Assign (3 CPIs)
+    // MarkUsed: Partially pre-funded -> Transfer + Allocate + Assign (3 CPIs)
     let sequence_prefunded = 2u64;
     let (pda_prefunded, _) = derive_bitmap_pda(&authority, namespace, sequence_prefunded);
-    let ix_prefunded = build_instruction(&payer, &authority, namespace, sequence_prefunded);
-    let accounts_prefunded: Vec<(Pubkey, Account)> = vec![
+    let ix_mark_prefunded =
+        build_mark_used_instruction(&payer, &authority, namespace, sequence_prefunded);
+    let accounts_mark_prefunded: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
         (
@@ -107,11 +141,12 @@ fn main() {
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
-    // Scenario 3: Fully pre-funded -> Allocate + Assign (2 CPIs)
+    // MarkUsed: Fully pre-funded -> Allocate + Assign (2 CPIs)
     let sequence_fully_funded = 3u64;
     let (pda_fully_funded, _) = derive_bitmap_pda(&authority, namespace, sequence_fully_funded);
-    let ix_fully_funded = build_instruction(&payer, &authority, namespace, sequence_fully_funded);
-    let accounts_fully_funded: Vec<(Pubkey, Account)> = vec![
+    let ix_mark_fully_funded =
+        build_mark_used_instruction(&payer, &authority, namespace, sequence_fully_funded);
+    let accounts_mark_fully_funded: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
         (
@@ -121,30 +156,79 @@ fn main() {
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
-    // Scenario 4: Account already exists (owned by program) -> 0 CPIs
+    // MarkUsed: Account already exists (owned by program) -> 0 CPIs
     let sequence_existing = 4u64;
     let (pda_existing, _) = derive_bitmap_pda(&authority, namespace, sequence_existing);
-    let ix_existing = build_instruction(&payer, &authority, namespace, sequence_existing);
-    let accounts_existing: Vec<(Pubkey, Account)> = vec![
+    let ix_mark_existing =
+        build_mark_used_instruction(&payer, &authority, namespace, sequence_existing);
+    let accounts_mark_existing: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
         (pda_existing, Account::new(rent_exempt_min, 32, &program_id)),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
+    // =========================================================================
+    // CreateBitmap benchmarks
+    // =========================================================================
+
+    // CreateBitmap: New account (0 lamports) -> single CreateAccount CPI
+    let sequence_create_new = 10u64;
+    let (pda_create_new, _) = derive_bitmap_pda(&authority, namespace, sequence_create_new);
+    let ix_create_new =
+        build_create_bitmap_instruction(&payer, &authority, namespace, sequence_create_new);
+    let accounts_create_new: Vec<(Pubkey, Account)> = vec![
+        (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
+        (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
+        (pda_create_new, Account::default()),
+        (SYSTEM_PROGRAM_ID, system_program_account.clone()),
+    ];
+
+    // CreateBitmap: Account already exists -> no-op
+    let sequence_create_existing = 11u64;
+    let (pda_create_existing, _) =
+        derive_bitmap_pda(&authority, namespace, sequence_create_existing);
+    let ix_create_existing =
+        build_create_bitmap_instruction(&payer, &authority, namespace, sequence_create_existing);
+    let accounts_create_existing: Vec<(Pubkey, Account)> = vec![
+        (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
+        (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
+        (
+            pda_create_existing,
+            Account::new(rent_exempt_min, 32, &program_id),
+        ),
+        (SYSTEM_PROGRAM_ID, system_program_account.clone()),
+    ];
+
     MolluskComputeUnitBencher::new(mollusk)
-        .bench(("new_account_single_cpi", &ix_new, &accounts_new))
+        // MarkUsed scenarios
+        .bench(("mark_used__new_account", &ix_mark_new, &accounts_mark_new))
         .bench((
-            "prefunded_partial_triple_cpi",
-            &ix_prefunded,
-            &accounts_prefunded,
+            "mark_used__prefunded_partial",
+            &ix_mark_prefunded,
+            &accounts_mark_prefunded,
         ))
         .bench((
-            "prefunded_full_double_cpi",
-            &ix_fully_funded,
-            &accounts_fully_funded,
+            "mark_used__prefunded_full",
+            &ix_mark_fully_funded,
+            &accounts_mark_fully_funded,
         ))
-        .bench(("existing_account_no_cpi", &ix_existing, &accounts_existing))
+        .bench((
+            "mark_used__existing_account",
+            &ix_mark_existing,
+            &accounts_mark_existing,
+        ))
+        // CreateBitmap scenarios
+        .bench((
+            "create_bitmap__new_account",
+            &ix_create_new,
+            &accounts_create_new,
+        ))
+        .bench((
+            "create_bitmap__existing_account",
+            &ix_create_existing,
+            &accounts_create_existing,
+        ))
         .must_pass(true)
         .out_dir("../target/benches")
         .execute();

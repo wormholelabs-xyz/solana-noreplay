@@ -100,6 +100,30 @@ RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
     cargo test --manifest-path tests/Cargo.toml
 
 # =============================================================================
+# Benchmark stage - runs compute unit benchmarks
+# =============================================================================
+FROM solana-dev AS bench
+
+WORKDIR /workspace
+
+# Copy manifests and test/bench code
+COPY --chown=node:node Cargo.toml Cargo.lock* ./
+COPY --chown=node:node program/Cargo.toml program/Cargo.toml
+COPY --chown=node:node tests tests
+
+# Create minimal program source (benches only need the .so, not the source)
+RUN mkdir -p program/src && echo > program/src/lib.rs
+
+# Copy built program from build stage
+COPY --from=solana-build --chown=node:node /workspace/deploy target/deploy
+
+# Run benchmarks and output results
+RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
+    --mount=type=cache,target=/workspace/target/release,uid=1000,gid=1000 \
+    cargo bench --manifest-path tests/Cargo.toml && \
+    cat target/benches/compute_units.md
+
+# =============================================================================
 # Development stage - adds Claude and other dev tools
 # =============================================================================
 FROM solana-dev AS devcontainer
