@@ -88,9 +88,25 @@ fn build_mark_used_instruction(
     }
 }
 
+/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
+const ACCOUNT_SIZE: usize = 33;
+
 fn rent_for_bitmap() -> u64 {
     // Higher than rent-exempt minimum to ensure prefunded_full skips Transfer CPI
     1_200_000
+}
+
+/// Create an account with bump stored at offset 0
+fn account_with_bump(lamports: u64, bump: u8, owner: &Pubkey) -> Account {
+    let mut data = vec![0u8; ACCOUNT_SIZE];
+    data[0] = bump; // Store bump at offset 0
+    Account {
+        lamports,
+        data,
+        owner: *owner,
+        executable: false,
+        rent_epoch: 0,
+    }
 }
 
 fn main() {
@@ -158,13 +174,16 @@ fn main() {
 
     // MarkUsed: Account already exists (owned by program) -> 0 CPIs
     let sequence_existing = 4u64;
-    let (pda_existing, _) = derive_bitmap_pda(&authority, namespace, sequence_existing);
+    let (pda_existing, bump_existing) = derive_bitmap_pda(&authority, namespace, sequence_existing);
     let ix_mark_existing =
         build_mark_used_instruction(&payer, &authority, namespace, sequence_existing);
     let accounts_mark_existing: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
-        (pda_existing, Account::new(rent_exempt_min, 32, &program_id)),
+        (
+            pda_existing,
+            account_with_bump(rent_exempt_min, bump_existing, &program_id),
+        ),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
@@ -186,7 +205,7 @@ fn main() {
 
     // CreateBitmap: Account already exists -> no-op
     let sequence_create_existing = 11u64;
-    let (pda_create_existing, _) =
+    let (pda_create_existing, bump_create_existing) =
         derive_bitmap_pda(&authority, namespace, sequence_create_existing);
     let ix_create_existing =
         build_create_bitmap_instruction(&payer, &authority, namespace, sequence_create_existing);
@@ -195,7 +214,7 @@ fn main() {
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
         (
             pda_create_existing,
-            Account::new(rent_exempt_min, 32, &program_id),
+            account_with_bump(rent_exempt_min, bump_create_existing, &program_id),
         ),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];

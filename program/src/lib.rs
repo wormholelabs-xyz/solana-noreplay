@@ -16,7 +16,12 @@ const IX_MARK_USED: u8 = 1;
 
 /// Bits per bitmap PDA (256 bits = 32 bytes)
 const BITS_PER_BUCKET: u64 = 256;
-const BYTES_PER_BUCKET: usize = (BITS_PER_BUCKET / 8) as usize; // 32
+const BITMAP_BYTES: usize = (BITS_PER_BUCKET / 8) as usize; // 32
+
+/// Account layout: [bump: u8][bitmap: 32 bytes] = 33 bytes total
+const BUMP_OFFSET: usize = 0;
+const BITMAP_OFFSET: usize = 1;
+const ACCOUNT_SIZE: usize = 1 + BITMAP_BYTES; // 33
 
 /// Maximum namespace length (2 chunks * 32 bytes = 64 bytes)
 /// Seeds: [authority (32), ns_chunk_0, ns_chunk_1, bucket_index (8)]
@@ -102,13 +107,62 @@ fn build_signer<'a>(
     pda_seeds: &'a BitmapPdaSeeds<'a>,
     bump_seed: &'a [u8],
 ) -> [Seed<'a>; 5] {
+    let seeds = pda_seeds.as_seeds_with_bump(authority, bump_seed);
     [
-        Seed::from(authority),
-        Seed::from(pda_seeds.ns_chunks[0]),
-        Seed::from(pda_seeds.ns_chunks[1]),
-        Seed::from(pda_seeds.bucket_bytes.as_ref()),
-        Seed::from(bump_seed),
+        Seed::from(seeds[0]),
+        Seed::from(seeds[1]),
+        Seed::from(seeds[2]),
+        Seed::from(seeds[3]),
+        Seed::from(seeds[4]),
     ]
+}
+
+/// Initialize a bitmap PDA if it doesn't exist yet, and verify the PDA is correct.
+/// Returns the bump seed (either from creation or from existing account).
+fn init_bitmap_pda<'a>(
+    payer: &'a AccountView,
+    authority: &'a AccountView,
+    bitmap_pda: &'a AccountView,
+    pda_seeds: &BitmapPdaSeeds,
+    program_id: &Address,
+) -> Result<u8, ProgramError> {
+    let pda_owner = unsafe { bitmap_pda.owner() };
+
+    if pda_owner != program_id {
+        // Need to create - derive PDA to get bump
+        let (expected_pda, bump) = pda_seeds.find_pda(authority.address(), program_id);
+
+        if bitmap_pda.address() != &expected_pda {
+            return Err(ProgramError::InvalidSeeds);
+        }
+
+        let bump_seed = [bump];
+        let signer_seeds = build_signer(authority.address().as_ref(), pda_seeds, &bump_seed);
+        let signers = [Signer::from(signer_seeds.as_ref())];
+
+        create_pda(payer, bitmap_pda, program_id, ACCOUNT_SIZE as u64, &signers)?;
+
+        // Store bump in the account
+        let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
+        account_data[BUMP_OFFSET] = bump;
+
+        Ok(bump)
+    } else {
+        // Account exists - read bump and verify PDA
+        let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
+        let bump = account_data[BUMP_OFFSET];
+
+        let bump_slice = [bump];
+        let seeds = pda_seeds.as_seeds_with_bump(authority.address().as_ref(), &bump_slice);
+        let expected_pda = Address::create_program_address(&seeds, program_id)
+            .map_err(|_| ProgramError::InvalidSeeds)?;
+
+        if bitmap_pda.address() != &expected_pda {
+            return Err(ProgramError::InvalidSeeds);
+        }
+
+        Ok(bump)
+    }
 }
 
 fn process_instruction(
@@ -161,30 +215,9 @@ fn process_create_bitmap(
     // Authority does NOT need to sign - this is permissionless
 
     let (namespace, sequence) = parse_instruction_data(data)?;
-
     let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
-    let (expected_pda, bump) = pda_seeds.find_pda(authority.address(), program_id);
 
-    if bitmap_pda.address() != &expected_pda {
-        return Err(ProgramError::InvalidSeeds);
-    }
-
-    let pda_owner = unsafe { bitmap_pda.owner() };
-
-    // Only create if not already owned by this program
-    if pda_owner != program_id {
-        let bump_seed = [bump];
-        let signer_seeds = build_signer(authority.address().as_ref(), &pda_seeds, &bump_seed);
-        let signers = [Signer::from(signer_seeds.as_ref())];
-
-        create_pda(
-            payer,
-            bitmap_pda,
-            program_id,
-            BYTES_PER_BUCKET as u64,
-            &signers,
-        )?;
-    }
+    init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
 
     Ok(())
 }
@@ -220,45 +253,26 @@ fn process_mark_used(program_id: &Address, accounts: &[AccountView], data: &[u8]
 
     let (namespace, sequence) = parse_instruction_data(data)?;
 
-    // Calculate bit position within bucket
+    // Calculate bit position within bucket (offset by BITMAP_OFFSET in account data)
     let bit_index = (sequence % BITS_PER_BUCKET) as usize;
-    let byte_index = bit_index / 8;
+    let byte_index = BITMAP_OFFSET + bit_index / 8;
     let bit_offset = bit_index % 8;
 
     let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
-    let (expected_pda, bump) = pda_seeds.find_pda(authority.address(), program_id);
 
-    if bitmap_pda.address() != &expected_pda {
-        return Err(ProgramError::InvalidSeeds);
-    }
-
-    let pda_owner = unsafe { bitmap_pda.owner() };
-
-    // Create bitmap PDA if it doesn't exist yet
-    if pda_owner != program_id {
-        let bump_seed = [bump];
-        let signer_seeds = build_signer(authority.address().as_ref(), &pda_seeds, &bump_seed);
-        let signers = [Signer::from(signer_seeds.as_ref())];
-
-        create_pda(
-            payer,
-            bitmap_pda,
-            program_id,
-            BYTES_PER_BUCKET as u64,
-            &signers,
-        )?;
-    }
+    // Initialize PDA if needed (also verifies PDA is correct)
+    init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
 
     // Get mutable access to bitmap data
-    let data = unsafe { bitmap_pda.borrow_unchecked_mut() };
+    let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
 
     // Check if bit is already set (replay protection)
-    if data[byte_index] & (1 << bit_offset) != 0 {
+    if account_data[byte_index] & (1 << bit_offset) != 0 {
         return Err(ProgramError::AccountAlreadyInitialized);
     }
 
     // Set the bit to mark sequence as used
-    data[byte_index] |= 1 << bit_offset;
+    account_data[byte_index] |= 1 << bit_offset;
 
     Ok(())
 }
@@ -291,13 +305,27 @@ impl<'a> BitmapPdaSeeds<'a> {
         }
     }
 
-    /// Build the seeds array for PDA derivation.
+    /// Build the seeds array for PDA derivation (without bump).
     pub fn as_seeds(&self, authority: &'a [u8]) -> [&[u8]; 4] {
         [
             authority,
             self.ns_chunks[0],
             self.ns_chunks[1],
             &self.bucket_bytes,
+        ]
+    }
+
+    /// Build the seeds array with bump for verification or signing.
+    pub fn as_seeds_with_bump<'b>(&'b self, authority: &'b [u8], bump: &'b [u8]) -> [&'b [u8]; 5]
+    where
+        'a: 'b,
+    {
+        [
+            authority,
+            self.ns_chunks[0],
+            self.ns_chunks[1],
+            &self.bucket_bytes,
+            bump,
         ]
     }
 

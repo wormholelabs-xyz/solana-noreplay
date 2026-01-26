@@ -102,9 +102,12 @@ fn mark_used_instruction(
     }
 }
 
-/// Rent cost for a bitmap PDA (32 bytes)
+/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
+const ACCOUNT_SIZE: usize = 33;
+
+/// Rent cost for a bitmap PDA (33 bytes)
 fn rent_for_bitmap() -> u64 {
-    Rent::default().minimum_balance(32)
+    Rent::default().minimum_balance(ACCOUNT_SIZE)
 }
 
 #[test]
