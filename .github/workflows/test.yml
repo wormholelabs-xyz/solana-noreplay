@@ -13,6 +13,14 @@ jobs:
       - run: rustup component add rustfmt
       - run: cargo fmt --all -- --check
 
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - name: Run clippy on tests
+        run: cargo clippy -p solana-noreplay-tests --all-targets -- -D warnings
+
   test:
     runs-on: ubuntu-latest
     steps:
