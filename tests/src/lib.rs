@@ -64,9 +64,9 @@ fn mark_used_instruction(
     Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(*payer, true),     // payer, signer
+            AccountMeta::new(*payer, true),              // payer, signer
             AccountMeta::new_readonly(*authority, true), // authority, signer
-            AccountMeta::new(pda, false),       // bitmap PDA
+            AccountMeta::new(pda, false),                // bitmap PDA
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
         data,
@@ -95,7 +95,12 @@ fn lamports_cost_is_rent_exempt_minimum() {
     let balance_before = svm.get_balance(&authority.pubkey()).unwrap();
 
     // Execute transaction (authority is both payer and authority)
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -143,8 +148,10 @@ fn works_when_pda_prefunded() {
 
     let authority = Keypair::new();
     let attacker = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
-    svm.airdrop(&attacker.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
+    svm.airdrop(&attacker.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     let namespace = b"test";
     let sequence = 123u64;
@@ -172,7 +179,12 @@ fn works_when_pda_prefunded() {
     svm.expire_blockhash();
 
     // Authority should still be able to claim this sequence
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -367,14 +379,20 @@ fn different_namespaces_are_independent() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     let namespace1 = b"namespace_a";
     let namespace2 = b"namespace_b";
     let sequence = 42u64;
 
     // Use sequence in namespace1
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace1, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace1,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -387,7 +405,12 @@ fn different_namespaces_are_independent() {
     svm.expire_blockhash();
 
     // Same sequence in namespace2 should succeed (independent)
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace2, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace2,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -396,7 +419,11 @@ fn different_namespaces_are_independent() {
         blockhash,
     );
     let result = svm.send_transaction(tx);
-    assert!(result.is_ok(), "Same sequence in different namespace should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Same sequence in different namespace should succeed: {:?}",
+        result
+    );
 }
 
 #[test]
@@ -405,12 +432,18 @@ fn empty_namespace_works() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     let namespace: &[u8] = b"";
     let sequence = 1u64;
 
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -428,13 +461,19 @@ fn short_namespace_works() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     // 10-byte namespace (less than 32)
     let namespace = b"short_ns!!";
     let sequence = 1u64;
 
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -452,13 +491,19 @@ fn long_namespace_works() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     // 64-byte namespace (spans 2 chunks)
     let namespace = [0xABu8; 64];
     let sequence = 1u64;
 
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), &namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        &namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -467,7 +512,11 @@ fn long_namespace_works() {
         blockhash,
     );
     let result = svm.send_transaction(tx);
-    assert!(result.is_ok(), "64-byte namespace should work: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "64-byte namespace should work: {:?}",
+        result
+    );
 }
 
 #[test]
@@ -476,13 +525,19 @@ fn max_namespace_length_works() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     // 64-byte namespace (maximum allowed = 2 chunks * 32 bytes)
     let namespace = [0xCDu8; MAX_NAMESPACE_LEN];
     let sequence = 1u64;
 
-    let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), &namespace, sequence);
+    let ix = mark_used_instruction(
+        &authority.pubkey(),
+        &authority.pubkey(),
+        &namespace,
+        sequence,
+    );
     let blockhash = svm.latest_blockhash();
     let tx = Transaction::new_signed_with_payer(
         &[ix],
@@ -491,7 +546,11 @@ fn max_namespace_length_works() {
         blockhash,
     );
     let result = svm.send_transaction(tx);
-    assert!(result.is_ok(), "64-byte namespace should work: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "64-byte namespace should work: {:?}",
+        result
+    );
 }
 
 #[test]
@@ -500,7 +559,8 @@ fn namespace_too_long_fails() {
     svm.add_program(PROGRAM_ID, &load_program());
 
     let authority = Keypair::new();
-    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+    svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .unwrap();
 
     // 65-byte namespace (one byte over maximum)
     let namespace = [0xEFu8; MAX_NAMESPACE_LEN + 1];
@@ -562,9 +622,9 @@ fn authority_must_be_signer() {
     let ix = Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(payer.pubkey(), true),           // payer, signer
+            AccountMeta::new(payer.pubkey(), true), // payer, signer
             AccountMeta::new_readonly(authority.pubkey(), false), // authority, NOT a signer!
-            AccountMeta::new(pda, false),                     // bitmap PDA
+            AccountMeta::new(pda, false),           // bitmap PDA
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
         data,
@@ -605,9 +665,9 @@ fn separate_payer_and_authority_works() {
     let ix = Instruction {
         program_id: PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(payer.pubkey(), true),              // payer, signer
+            AccountMeta::new(payer.pubkey(), true), // payer, signer
             AccountMeta::new_readonly(authority.pubkey(), true), // authority, signer
-            AccountMeta::new(pda, false),                        // bitmap PDA
+            AccountMeta::new(pda, false),           // bitmap PDA
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
         data,
@@ -621,5 +681,9 @@ fn separate_payer_and_authority_works() {
         blockhash,
     );
     let result = svm.send_transaction(tx);
-    assert!(result.is_ok(), "Should work with separate payer and authority: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Should work with separate payer and authority: {:?}",
+        result
+    );
 }

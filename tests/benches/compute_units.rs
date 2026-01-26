@@ -100,7 +100,10 @@ fn main() {
     let accounts_prefunded: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
-        (pda_prefunded, Account::new(rent_exempt_min / 2, 0, &SYSTEM_PROGRAM_ID)),
+        (
+            pda_prefunded,
+            Account::new(rent_exempt_min / 2, 0, &SYSTEM_PROGRAM_ID),
+        ),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
@@ -111,7 +114,10 @@ fn main() {
     let accounts_fully_funded: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
         (authority, Account::new(0, 0, &SYSTEM_PROGRAM_ID)),
-        (pda_fully_funded, Account::new(rent_exempt_min, 0, &SYSTEM_PROGRAM_ID)),
+        (
+            pda_fully_funded,
+            Account::new(rent_exempt_min, 0, &SYSTEM_PROGRAM_ID),
+        ),
         (SYSTEM_PROGRAM_ID, system_program_account.clone()),
     ];
 
@@ -128,8 +134,16 @@ fn main() {
 
     MolluskComputeUnitBencher::new(mollusk)
         .bench(("new_account_single_cpi", &ix_new, &accounts_new))
-        .bench(("prefunded_partial_triple_cpi", &ix_prefunded, &accounts_prefunded))
-        .bench(("prefunded_full_double_cpi", &ix_fully_funded, &accounts_fully_funded))
+        .bench((
+            "prefunded_partial_triple_cpi",
+            &ix_prefunded,
+            &accounts_prefunded,
+        ))
+        .bench((
+            "prefunded_full_double_cpi",
+            &ix_fully_funded,
+            &accounts_fully_funded,
+        ))
         .bench(("existing_account_no_cpi", &ix_existing, &accounts_existing))
         .must_pass(true)
         .out_dir("../target/benches")
