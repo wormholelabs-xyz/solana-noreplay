@@ -6,34 +6,35 @@ use mollusk_svm::Mollusk;
 use mollusk_svm_bencher::MolluskComputeUnitBencher;
 use solana_account::Account;
 use solana_instruction::{AccountMeta, Instruction};
+use solana_noreplay_tests::{derive_bitmap_pda, PROGRAM_ID};
 use solana_pubkey::Pubkey;
 
 const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("11111111111111111111111111111111");
-const BITS_PER_BUCKET: u64 = 256;
-const SEED_CHUNK_SIZE: usize = 32;
 
 /// Instruction discriminators (must match program)
 const IX_CREATE_BITMAP: u8 = 0;
 const IX_MARK_USED: u8 = 1;
 
+/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
+const ACCOUNT_SIZE: usize = 33;
+
 fn program_id() -> Pubkey {
-    "rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-        .parse()
-        .unwrap()
+    PROGRAM_ID.to_bytes().into()
 }
 
-fn split_namespace(namespace: &[u8]) -> [&[u8]; 2] {
-    let mid = namespace.len().min(SEED_CHUNK_SIZE);
-    [&namespace[..mid], &namespace[mid..]]
+/// Higher than rent-exempt minimum to ensure prefunded_full skips Transfer CPI
+fn rent_for_bitmap() -> u64 {
+    1_200_000
 }
 
-fn derive_bitmap_pda(authority: &Pubkey, namespace: &[u8], sequence: u64) -> (Pubkey, u8) {
-    let program_id = program_id();
-    let bucket_index = sequence / BITS_PER_BUCKET;
-    let bucket_bytes = bucket_index.to_le_bytes();
-    let [ns0, ns1] = split_namespace(namespace);
-    let seeds: [&[u8]; 4] = [authority.as_ref(), ns0, ns1, &bucket_bytes];
-    Pubkey::find_program_address(&seeds, &program_id)
+/// Convert solana_pubkey::Pubkey to solana_sdk::pubkey::Pubkey for derive_bitmap_pda
+fn to_sdk_pubkey(pubkey: &Pubkey) -> solana_sdk::pubkey::Pubkey {
+    pubkey.to_bytes().into()
+}
+
+/// Convert solana_sdk::pubkey::Pubkey to solana_pubkey::Pubkey
+fn from_sdk_pubkey(pubkey: solana_sdk::pubkey::Pubkey) -> Pubkey {
+    pubkey.to_bytes().into()
 }
 
 fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) -> Vec<u8> {
@@ -46,6 +47,7 @@ fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) ->
     data
 }
 
+/// Build instruction to create a bitmap PDA permissionlessly
 fn build_create_bitmap_instruction(
     payer: &Pubkey,
     authority: &Pubkey,
@@ -53,7 +55,8 @@ fn build_create_bitmap_instruction(
     sequence: u64,
 ) -> Instruction {
     let program_id = program_id();
-    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
+    let (pda, _) = derive_bitmap_pda(&to_sdk_pubkey(authority), namespace, sequence);
+    let pda = from_sdk_pubkey(pda);
 
     Instruction {
         program_id,
@@ -67,6 +70,7 @@ fn build_create_bitmap_instruction(
     }
 }
 
+/// Build instruction to mark a sequence number as used
 fn build_mark_used_instruction(
     payer: &Pubkey,
     authority: &Pubkey,
@@ -74,7 +78,8 @@ fn build_mark_used_instruction(
     sequence: u64,
 ) -> Instruction {
     let program_id = program_id();
-    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
+    let (pda, _) = derive_bitmap_pda(&to_sdk_pubkey(authority), namespace, sequence);
+    let pda = from_sdk_pubkey(pda);
 
     Instruction {
         program_id,
@@ -86,14 +91,6 @@ fn build_mark_used_instruction(
         ],
         data: build_instruction_data(IX_MARK_USED, namespace, sequence),
     }
-}
-
-/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
-const ACCOUNT_SIZE: usize = 33;
-
-fn rent_for_bitmap() -> u64 {
-    // Higher than rent-exempt minimum to ensure prefunded_full skips Transfer CPI
-    1_200_000
 }
 
 /// Create an account with bump stored at offset 0
@@ -117,14 +114,14 @@ fn main() {
 
     let payer = Pubkey::new_unique();
     let authority = Pubkey::new_unique();
+    let sdk_authority = to_sdk_pubkey(&authority);
     let namespace = b"bench";
     let rent_exempt_min = rent_for_bitmap();
 
-    let system_program_account = {
-        let mut acc = Account::default();
-        acc.executable = true;
-        acc.owner = solana_pubkey::pubkey!("NativeLoader1111111111111111111111111111111");
-        acc
+    let system_program_account = Account {
+        executable: true,
+        owner: solana_pubkey::pubkey!("NativeLoader1111111111111111111111111111111"),
+        ..Default::default()
     };
 
     // =========================================================================
@@ -133,7 +130,8 @@ fn main() {
 
     // MarkUsed: New account (0 lamports) -> single CreateAccount CPI
     let sequence_new = 1u64;
-    let (pda_new, _) = derive_bitmap_pda(&authority, namespace, sequence_new);
+    let (pda_new, _) = derive_bitmap_pda(&sdk_authority, namespace, sequence_new);
+    let pda_new = from_sdk_pubkey(pda_new);
     let ix_mark_new = build_mark_used_instruction(&payer, &authority, namespace, sequence_new);
     let accounts_mark_new: Vec<(Pubkey, Account)> = vec![
         (payer, Account::new(10_000_000_000, 0, &SYSTEM_PROGRAM_ID)),
@@ -144,7 +142,8 @@ fn main() {
 
     // MarkUsed: Partially pre-funded -> Transfer + Allocate + Assign (3 CPIs)
     let sequence_prefunded = 2u64;
-    let (pda_prefunded, _) = derive_bitmap_pda(&authority, namespace, sequence_prefunded);
+    let (pda_prefunded, _) = derive_bitmap_pda(&sdk_authority, namespace, sequence_prefunded);
+    let pda_prefunded = from_sdk_pubkey(pda_prefunded);
     let ix_mark_prefunded =
         build_mark_used_instruction(&payer, &authority, namespace, sequence_prefunded);
     let accounts_mark_prefunded: Vec<(Pubkey, Account)> = vec![
@@ -159,7 +158,8 @@ fn main() {
 
     // MarkUsed: Fully pre-funded -> Allocate + Assign (2 CPIs)
     let sequence_fully_funded = 3u64;
-    let (pda_fully_funded, _) = derive_bitmap_pda(&authority, namespace, sequence_fully_funded);
+    let (pda_fully_funded, _) = derive_bitmap_pda(&sdk_authority, namespace, sequence_fully_funded);
+    let pda_fully_funded = from_sdk_pubkey(pda_fully_funded);
     let ix_mark_fully_funded =
         build_mark_used_instruction(&payer, &authority, namespace, sequence_fully_funded);
     let accounts_mark_fully_funded: Vec<(Pubkey, Account)> = vec![
@@ -174,7 +174,9 @@ fn main() {
 
     // MarkUsed: Account already exists (owned by program) -> 0 CPIs
     let sequence_existing = 4u64;
-    let (pda_existing, bump_existing) = derive_bitmap_pda(&authority, namespace, sequence_existing);
+    let (pda_existing, bump_existing) =
+        derive_bitmap_pda(&sdk_authority, namespace, sequence_existing);
+    let pda_existing = from_sdk_pubkey(pda_existing);
     let ix_mark_existing =
         build_mark_used_instruction(&payer, &authority, namespace, sequence_existing);
     let accounts_mark_existing: Vec<(Pubkey, Account)> = vec![
@@ -193,7 +195,8 @@ fn main() {
 
     // CreateBitmap: New account (0 lamports) -> single CreateAccount CPI
     let sequence_create_new = 10u64;
-    let (pda_create_new, _) = derive_bitmap_pda(&authority, namespace, sequence_create_new);
+    let (pda_create_new, _) = derive_bitmap_pda(&sdk_authority, namespace, sequence_create_new);
+    let pda_create_new = from_sdk_pubkey(pda_create_new);
     let ix_create_new =
         build_create_bitmap_instruction(&payer, &authority, namespace, sequence_create_new);
     let accounts_create_new: Vec<(Pubkey, Account)> = vec![
@@ -206,7 +209,8 @@ fn main() {
     // CreateBitmap: Account already exists -> no-op
     let sequence_create_existing = 11u64;
     let (pda_create_existing, bump_create_existing) =
-        derive_bitmap_pda(&authority, namespace, sequence_create_existing);
+        derive_bitmap_pda(&sdk_authority, namespace, sequence_create_existing);
+    let pda_create_existing = from_sdk_pubkey(pda_create_existing);
     let ix_create_existing =
         build_create_bitmap_instruction(&payer, &authority, namespace, sequence_create_existing);
     let accounts_create_existing: Vec<(Pubkey, Account)> = vec![

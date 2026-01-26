@@ -15,7 +15,7 @@ const IX_CREATE_BITMAP: u8 = 0;
 const IX_MARK_USED: u8 = 1;
 
 /// Bits per bitmap PDA (256 bits = 32 bytes)
-const BITS_PER_BUCKET: u64 = 256;
+pub const BITS_PER_BUCKET: u64 = 256;
 const BITMAP_BYTES: usize = (BITS_PER_BUCKET / 8) as usize; // 32
 
 /// Account layout: [bump: u8][bitmap: 32 bytes] = 33 bytes total
@@ -25,7 +25,7 @@ const ACCOUNT_SIZE: usize = 1 + BITMAP_BYTES; // 33
 
 /// Maximum namespace length (2 chunks * 32 bytes = 64 bytes)
 /// Seeds: [authority (32), ns_chunk_0, ns_chunk_1, bucket_index (8)]
-const MAX_NAMESPACE_LEN: usize = 64;
+pub const MAX_NAMESPACE_LEN: usize = 64;
 
 /// Size of each seed component for namespace chunking
 const SEED_CHUNK_SIZE: usize = 32;
@@ -143,12 +143,16 @@ fn init_bitmap_pda<'a>(
         create_pda(payer, bitmap_pda, program_id, ACCOUNT_SIZE as u64, &signers)?;
 
         // Store bump in the account
+        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
+        // No other references exist.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
         account_data[BUMP_OFFSET] = bump;
 
         Ok(bump)
     } else {
         // Account exists - read bump and verify PDA
+        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
+        // No other references exist.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
         let bump = account_data[BUMP_OFFSET];
 
@@ -264,6 +268,8 @@ fn process_mark_used(program_id: &Address, accounts: &[AccountView], data: &[u8]
     init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
 
     // Get mutable access to bitmap data
+    // SAFETY: We have exclusive write access to the PDA data after creation/validation.
+    // No other references exist.
     let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
 
     // Check if bit is already set (replay protection)
