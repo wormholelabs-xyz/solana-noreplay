@@ -1,24 +1,14 @@
 use pinocchio::{
-    cpi::{invoke_signed, Seed, Signer},
+    cpi::{Seed, Signer},
     default_panic_handler,
     error::ProgramError,
-    instruction::{InstructionAccount, InstructionView},
-    no_allocator, program_entrypoint,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
+    no_allocator, program_entrypoint, AccountView, Address, ProgramResult,
 };
+use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
 program_entrypoint!(process_instruction);
 no_allocator!();
 default_panic_handler!();
-
-/// System program address (all zeros)
-const SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0; 32]);
-
-// System program instruction indices
-const ASSIGN_IX: u32 = 1;
-const TRANSFER_IX: u32 = 2;
-const ALLOCATE_IX: u32 = 8;
 
 /// Bits per bitmap PDA (256 bits = 32 bytes)
 const BITS_PER_BUCKET: u64 = 256;
@@ -40,86 +30,39 @@ fn create_pda<'a>(
     space: u64,
     signers: &[Signer],
 ) -> ProgramResult {
-    let rent = Rent::get()?;
-    let required_lamports = rent.try_minimum_balance(space as usize)?;
     let current_lamports = pda.lamports();
 
-    if current_lamports == 0 {
-        // New account: single CreateAccount CPI (most efficient)
-        let mut ix_data = [0u8; 52];
-        // instruction index 0 (CreateAccount) - already zeros
-        ix_data[4..12].copy_from_slice(&required_lamports.to_le_bytes());
-        ix_data[12..20].copy_from_slice(&space.to_le_bytes());
-        ix_data[20..52].copy_from_slice(owner.as_ref());
+    let create_account = CreateAccount::with_minimum_balance(payer, pda, space, owner, None)?;
 
-        invoke_signed::<2>(
-            &InstructionView {
-                program_id: &SYSTEM_PROGRAM_ID,
-                accounts: &[
-                    InstructionAccount::writable_signer(payer.address()),
-                    InstructionAccount::writable_signer(pda.address()),
-                ],
-                data: &ix_data,
-            },
-            &[payer, pda],
-            signers,
-        )?;
+    if current_lamports == 0 {
+        create_account.invoke_signed(signers)?;
     } else {
+        let required_lamports = create_account.lamports;
         // Pre-funded account: need 3 separate CPIs
 
         // Transfer additional lamports if needed
         if current_lamports < required_lamports {
-            let mut ix_data = [0u8; 12];
-            ix_data[0..4].copy_from_slice(&TRANSFER_IX.to_le_bytes());
-            ix_data[4..12].copy_from_slice(&(required_lamports - current_lamports).to_le_bytes());
-
-            invoke_signed::<2>(
-                &InstructionView {
-                    program_id: &SYSTEM_PROGRAM_ID,
-                    accounts: &[
-                        InstructionAccount::writable_signer(payer.address()),
-                        InstructionAccount::writable(pda.address()),
-                    ],
-                    data: &ix_data,
-                },
-                &[payer, pda],
-                &[],
-            )?;
+            Transfer {
+                from: payer,
+                to: pda,
+                lamports: required_lamports - current_lamports,
+            }
+            .invoke()?;
         }
 
         // Allocate space
-        {
-            let mut ix_data = [0u8; 12];
-            ix_data[0..4].copy_from_slice(&ALLOCATE_IX.to_le_bytes());
-            ix_data[4..12].copy_from_slice(&space.to_le_bytes());
-
-            invoke_signed::<1>(
-                &InstructionView {
-                    program_id: &SYSTEM_PROGRAM_ID,
-                    accounts: &[InstructionAccount::writable_signer(pda.address())],
-                    data: &ix_data,
-                },
-                &[pda],
-                signers,
-            )?;
+        Allocate {
+            account: pda,
+            space,
         }
+        .invoke_signed(signers)?;
 
         // Assign to owner
-        {
-            let mut ix_data = [0u8; 36];
-            ix_data[0..4].copy_from_slice(&ASSIGN_IX.to_le_bytes());
-            ix_data[4..36].copy_from_slice(owner.as_ref());
-
-            invoke_signed::<1>(
-                &InstructionView {
-                    program_id: &SYSTEM_PROGRAM_ID,
-                    accounts: &[InstructionAccount::writable_signer(pda.address())],
-                    data: &ix_data,
-                },
-                &[pda],
-                signers,
-            )?;
+        Assign {
+            account: pda,
+            owner,
         }
+        .invoke_signed(signers)?;
     }
 
     Ok(())
