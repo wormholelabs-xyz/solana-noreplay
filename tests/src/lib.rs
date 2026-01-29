@@ -3,9 +3,8 @@ use solana_sdk::rent::Rent;
 // Re-export from the program's client module
 pub use solana_noreplay::client::{
     build_instruction_data, derive_bitmap_pda, CreateBitmap, MarkUsed, BITMAP_ACCOUNT_SIZE,
-    BITS_PER_BUCKET, MAX_NAMESPACE_LEN, PROGRAM_ID,
+    BITS_PER_BUCKET, CREATE_BITMAP, MARK_USED, MAX_NAMESPACE_LEN, PROGRAM_ID,
 };
-pub use solana_noreplay::Instruction;
 
 pub fn load_program() -> Vec<u8> {
     std::fs::read("../target/deploy/solana_noreplay.so")
@@ -568,7 +567,7 @@ mod tests {
         // (chunk 1 would be 33 bytes, exceeding Solana's 32-byte seed limit)
         let namespace = [0xEFu8; MAX_NAMESPACE_LEN + 1];
         let sequence = 1u64;
-        let data = build_instruction_data(Instruction::MARK_USED, &namespace, sequence);
+        let data = build_instruction_data(MARK_USED, &namespace, sequence);
         let dummy_pda = Pubkey::new_unique();
 
         let ix = SdkInstruction {
@@ -607,7 +606,7 @@ mod tests {
 
         // Create instruction but mark authority as non-signer
         let (pda, _bump) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
-        let data = build_instruction_data(Instruction::MARK_USED, namespace, sequence);
+        let data = build_instruction_data(MARK_USED, namespace, sequence);
 
         let ix = SdkInstruction {
             program_id: PROGRAM_ID,

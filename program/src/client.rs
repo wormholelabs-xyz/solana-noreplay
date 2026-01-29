@@ -30,8 +30,6 @@ use solana_sdk::{
     system_program,
 };
 
-use crate::instruction::Instruction as ProgramInstruction;
-
 /// Program ID for the NoReplay program.
 pub const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
 
@@ -115,7 +113,7 @@ impl CreateBitmap<'_> {
                 AccountMeta::new_readonly(system_program::ID, false),
             ],
             data: build_instruction_data(
-                ProgramInstruction::CREATE_BITMAP,
+                crate::instruction::CREATE_BITMAP,
                 self.namespace,
                 self.sequence,
             ),
@@ -175,7 +173,7 @@ impl MarkUsed<'_> {
                 AccountMeta::new_readonly(system_program::ID, false),
             ],
             data: build_instruction_data(
-                ProgramInstruction::MARK_USED,
+                crate::instruction::MARK_USED,
                 self.namespace,
                 self.sequence,
             ),
@@ -189,5 +187,6 @@ impl MarkUsed<'_> {
 }
 
 // Re-export useful constants for clients
+pub use crate::instruction::{CREATE_BITMAP, MARK_USED};
 pub use crate::state::{BITMAP_ACCOUNT_SIZE, BITS_PER_BUCKET};
-pub use crate::{Instruction as ProgramInstructionEnum, MAX_NAMESPACE_LEN};
+pub use crate::MAX_NAMESPACE_LEN;

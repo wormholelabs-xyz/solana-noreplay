@@ -5,7 +5,7 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
-use crate::instruction::Instruction;
+use crate::instruction::{CreateBitmap, MarkUsed, CREATE_BITMAP, MARK_USED};
 use crate::pda::BitmapPdaSeeds;
 use crate::state::{BitmapAccount, BITMAP_ACCOUNT_SIZE};
 
@@ -15,15 +15,12 @@ pub fn process_instruction(
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    match Instruction::parse(instruction_data)? {
-        Instruction::CreateBitmap {
-            namespace,
-            sequence,
-        } => process_create_bitmap(program_id, accounts, namespace, sequence),
-        Instruction::MarkUsed {
-            namespace,
-            sequence,
-        } => process_mark_used(program_id, accounts, namespace, sequence),
+    match instruction_data.split_first() {
+        Some((&CREATE_BITMAP, data)) => {
+            CreateBitmap::try_from((data, accounts))?.process(program_id)
+        }
+        Some((&MARK_USED, data)) => MarkUsed::try_from((data, accounts))?.process(program_id),
+        _ => Err(ProgramError::InvalidInstructionData),
     }
 }
 
@@ -75,6 +72,7 @@ fn create_pda<'a>(
 }
 
 /// Build signer seeds for PDA.
+#[inline]
 fn build_signer<'a>(
     authority: &'a [u8],
     pda_seeds: &'a BitmapPdaSeeds<'a>,
@@ -122,8 +120,8 @@ fn init_bitmap_pda<'a>(
         )?;
 
         // Store bump in the account
-        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
-        // No other references exist.
+        // SAFETY: We have exclusive write access to the PDA data after creation.
+        // The account was just created by this program, so no other references exist.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
         let bitmap =
             BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
@@ -132,8 +130,8 @@ fn init_bitmap_pda<'a>(
         Ok(bump)
     } else {
         // Account exists - read bump and verify PDA
-        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
-        // No other references exist.
+        // SAFETY: We have exclusive write access to the PDA data after owner validation.
+        // The owner check above confirms this is our program's account.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
         let bitmap =
             BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
@@ -152,81 +150,60 @@ fn init_bitmap_pda<'a>(
     }
 }
 
-/// Creates a bitmap PDA permissionlessly.
-///
-/// This allows anyone to pre-create and fund bitmap accounts, reducing
-/// compute and cost for the authority when they later call MarkUsed.
-///
-/// # Accounts
-/// 0. `[writable, signer]` payer - Pays for PDA creation
-/// 1. `[]` authority - Used for PDA derivation (does NOT need to sign)
-/// 2. `[writable]` bitmap_pda - PDA to create
-/// 3. `[]` system_program - System program
-fn process_create_bitmap(
-    program_id: &Address,
-    accounts: &[AccountView],
-    namespace: &[u8],
-    sequence: u64,
-) -> ProgramResult {
-    let [payer, authority, bitmap_pda, _system_program] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
+// =============================================================================
+// Instruction Implementations
+// =============================================================================
 
-    if !payer.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
+impl CreateBitmap<'_> {
+    /// Process CreateBitmap instruction.
+    ///
+    /// Creates a bitmap PDA permissionlessly. Anyone can pre-create and fund
+    /// bitmap accounts, reducing compute and cost for the authority when they
+    /// later call MarkUsed.
+    pub fn process(&self, program_id: &Address) -> ProgramResult {
+        let pda_seeds = BitmapPdaSeeds::new(self.data.namespace, self.data.sequence);
+
+        init_bitmap_pda(
+            self.accounts.payer,
+            self.accounts.authority,
+            self.accounts.bitmap_pda,
+            &pda_seeds,
+            program_id,
+        )?;
+
+        Ok(())
     }
-
-    // Authority does NOT need to sign - this is permissionless
-
-    let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
-
-    init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
-
-    Ok(())
 }
 
-/// Marks a sequence number as used for replay protection.
-///
-/// # Accounts
-/// 0. `[writable, signer]` payer - Pays for PDA creation if needed
-/// 1. `[signer]` authority - Owner of the sequence space (included in PDA seeds)
-/// 2. `[writable]` bitmap_pda - PDA storing the bitmap for this bucket
-/// 3. `[]` system_program - System program for PDA creation
-fn process_mark_used(
-    program_id: &Address,
-    accounts: &[AccountView],
-    namespace: &[u8],
-    sequence: u64,
-) -> ProgramResult {
-    let [payer, authority, bitmap_pda, _system_program] = accounts else {
-        return Err(ProgramError::NotEnoughAccountKeys);
-    };
+impl MarkUsed<'_> {
+    /// Process MarkUsed instruction.
+    ///
+    /// Marks a sequence number as used for replay protection. Fails if the
+    /// sequence was already marked (replay detected).
+    pub fn process(&self, program_id: &Address) -> ProgramResult {
+        let pda_seeds = BitmapPdaSeeds::new(self.data.namespace, self.data.sequence);
 
-    if !payer.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
+        // Initialize PDA if needed (also verifies PDA is correct)
+        init_bitmap_pda(
+            self.accounts.payer,
+            self.accounts.authority,
+            self.accounts.bitmap_pda,
+            &pda_seeds,
+            program_id,
+        )?;
+
+        // Get mutable access to bitmap data
+        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
+        // The init_bitmap_pda call above ensures the account is valid and owned by us.
+        let account_data = unsafe { self.accounts.bitmap_pda.borrow_unchecked_mut() };
+        let mut bitmap =
+            BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
+
+        // Mark sequence as used, fail if already used (replay protection)
+        if bitmap.mark_used(self.data.sequence) {
+            return Err(ProgramError::AccountAlreadyInitialized);
+        }
+
+        Ok(())
     }
-
-    // Authority MUST sign to prevent DOS attacks
-    if !authority.is_signer() {
-        return Err(ProgramError::MissingRequiredSignature);
-    }
-
-    let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
-
-    // Initialize PDA if needed (also verifies PDA is correct)
-    init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
-
-    // Get mutable access to bitmap data
-    // SAFETY: We have exclusive write access to the PDA data after creation/validation.
-    // No other references exist.
-    let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
-    let mut bitmap =
-        BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
-
-    // Mark sequence as used, fail if already used (replay protection)
-    if bitmap.mark_used(sequence) {
-        return Err(ProgramError::AccountAlreadyInitialized);
-    }
-
-    Ok(())
 }
