@@ -25,9 +25,9 @@ USER node
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/node/.cargo/bin:$PATH"
 
-# Install Solana CLI (agave)
-ARG SOLANA_VERSION=3.1.7
-RUN sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+# Install Solana CLI (agave) - version from .solana-version file
+COPY .solana-version /tmp/.solana-version
+RUN sh -c "$(curl -sSfL https://release.anza.xyz/v$(cat /tmp/.solana-version)/install)"
 ENV PATH="/home/node/.local/share/solana/install/active_release/bin:$PATH"
 
 # Pre-warm Solana SBF build cache
