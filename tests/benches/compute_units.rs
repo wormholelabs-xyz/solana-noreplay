@@ -6,17 +6,12 @@ use mollusk_svm::Mollusk;
 use mollusk_svm_bencher::MolluskComputeUnitBencher;
 use solana_account::Account;
 use solana_instruction::{AccountMeta, Instruction};
-use solana_noreplay_tests::{derive_bitmap_pda, PROGRAM_ID};
+use solana_noreplay::client::{
+    derive_bitmap_pda, CreateBitmap, MarkUsed, BITMAP_ACCOUNT_SIZE, PROGRAM_ID,
+};
 use solana_pubkey::Pubkey;
 
 const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("11111111111111111111111111111111");
-
-/// Instruction discriminators (must match program)
-const IX_CREATE_BITMAP: u8 = 0;
-const IX_MARK_USED: u8 = 1;
-
-/// Account size: 1 byte bump + 128 bytes bitmap = 129 bytes
-const ACCOUNT_SIZE: usize = 129;
 
 fn program_id() -> Pubkey {
     PROGRAM_ID.to_bytes().into()
@@ -37,65 +32,66 @@ fn from_sdk_pubkey(pubkey: solana_sdk::pubkey::Pubkey) -> Pubkey {
     pubkey.to_bytes().into()
 }
 
-fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) -> Vec<u8> {
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
-    data.push(discriminator);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
-    data
+/// Convert solana_sdk::instruction::Instruction to solana_instruction::Instruction for mollusk.
+fn to_mollusk_instruction(ix: solana_sdk::instruction::Instruction) -> Instruction {
+    Instruction {
+        program_id: ix.program_id.to_bytes().into(),
+        accounts: ix
+            .accounts
+            .into_iter()
+            .map(|a| AccountMeta {
+                pubkey: a.pubkey.to_bytes().into(),
+                is_signer: a.is_signer,
+                is_writable: a.is_writable,
+            })
+            .collect(),
+        data: ix.data,
+    }
 }
 
-/// Build instruction to create a bitmap PDA permissionlessly
+/// Build instruction to create a bitmap PDA permissionlessly.
 fn build_create_bitmap_instruction(
     payer: &Pubkey,
     authority: &Pubkey,
     namespace: &[u8],
     sequence: u64,
 ) -> Instruction {
-    let program_id = program_id();
-    let (pda, _) = derive_bitmap_pda(&to_sdk_pubkey(authority), namespace, sequence);
-    let pda = from_sdk_pubkey(pda);
-
-    Instruction {
-        program_id,
-        accounts: vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, false), // NOT a signer for CreateBitmap
-            AccountMeta::new(pda, false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ],
-        data: build_instruction_data(IX_CREATE_BITMAP, namespace, sequence),
-    }
+    let sdk_payer = to_sdk_pubkey(payer);
+    let sdk_authority = to_sdk_pubkey(authority);
+    to_mollusk_instruction(
+        CreateBitmap {
+            payer: &sdk_payer,
+            authority: &sdk_authority,
+            namespace,
+            sequence,
+        }
+        .instruction(),
+    )
 }
 
-/// Build instruction to mark a sequence number as used
+/// Build instruction to mark a sequence number as used.
 fn build_mark_used_instruction(
     payer: &Pubkey,
     authority: &Pubkey,
     namespace: &[u8],
     sequence: u64,
 ) -> Instruction {
-    let program_id = program_id();
-    let (pda, _) = derive_bitmap_pda(&to_sdk_pubkey(authority), namespace, sequence);
-    let pda = from_sdk_pubkey(pda);
-
-    Instruction {
-        program_id,
-        accounts: vec![
-            AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(*authority, true), // signer for MarkUsed
-            AccountMeta::new(pda, false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ],
-        data: build_instruction_data(IX_MARK_USED, namespace, sequence),
-    }
+    let sdk_payer = to_sdk_pubkey(payer);
+    let sdk_authority = to_sdk_pubkey(authority);
+    to_mollusk_instruction(
+        MarkUsed {
+            payer: &sdk_payer,
+            authority: &sdk_authority,
+            namespace,
+            sequence,
+        }
+        .instruction(),
+    )
 }
 
 /// Create an account with bump stored at offset 0
 fn account_with_bump(lamports: u64, bump: u8, owner: &Pubkey) -> Account {
-    let mut data = vec![0u8; ACCOUNT_SIZE];
+    let mut data = vec![0u8; BITMAP_ACCOUNT_SIZE];
     data[0] = bump; // Store bump at offset 0
     Account {
         lamports,

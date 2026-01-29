@@ -1,107 +1,20 @@
-use solana_sdk::{
-    instruction::{AccountMeta, Instruction},
-    pubkey::Pubkey,
-    rent::Rent,
+use solana_sdk::rent::Rent;
+
+// Re-export from the program's client module
+pub use solana_noreplay::client::{
+    build_instruction_data, derive_bitmap_pda, CreateBitmap, MarkUsed, BITMAP_ACCOUNT_SIZE,
+    BITS_PER_BUCKET, MAX_NAMESPACE_LEN, PROGRAM_ID,
 };
-
-pub const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
-
-/// Instruction discriminators (must match program)
-const IX_CREATE_BITMAP: u8 = 0;
-const IX_MARK_USED: u8 = 1;
-
-/// Bits per bitmap bucket (must match program: 128 bytes * 8 = 1024 bits)
-pub const BITS_PER_BUCKET: u64 = 1024;
-
-/// Maximum namespace length (2 chunks * 32 bytes = 64 bytes)
-pub const MAX_NAMESPACE_LEN: usize = 64;
-
-/// Size of each seed component for namespace chunking
-const SEED_CHUNK_SIZE: usize = 32;
+pub use solana_noreplay::Instruction;
 
 pub fn load_program() -> Vec<u8> {
     std::fs::read("../target/deploy/solana_noreplay.so")
         .expect("Program not built. Run `cargo build-sbf` first.")
 }
 
-/// Split a namespace into two chunks for PDA seed derivation.
-/// Each chunk is up to 32 bytes. Second chunk may be empty.
-fn split_namespace(namespace: &[u8]) -> [&[u8]; 2] {
-    let mid = namespace.len().min(SEED_CHUNK_SIZE);
-    [&namespace[..mid], &namespace[mid..]]
-}
-
-/// Derive the bitmap PDA for a given authority, namespace, and sequence number.
-/// Seeds are always: [authority, ns_chunk_0, ns_chunk_1, bucket_index]
-pub fn derive_bitmap_pda(authority: &Pubkey, namespace: &[u8], sequence: u64) -> (Pubkey, u8) {
-    let bucket_index = sequence / BITS_PER_BUCKET;
-    let bucket_bytes = bucket_index.to_le_bytes();
-    let [ns0, ns1] = split_namespace(namespace);
-
-    let seeds: [&[u8]; 4] = [authority.as_ref(), ns0, ns1, &bucket_bytes];
-
-    Pubkey::find_program_address(&seeds, &PROGRAM_ID)
-}
-
-/// Build instruction data for namespace + sequence (shared by both instructions)
-fn build_instruction_data(discriminator: u8, namespace: &[u8], sequence: u64) -> Vec<u8> {
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
-    data.push(discriminator);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&sequence.to_le_bytes());
-    data
-}
-
-/// Build instruction to create a bitmap PDA permissionlessly
-pub fn create_bitmap_instruction(
-    payer: &Pubkey,
-    authority: &Pubkey,
-    namespace: &[u8],
-    sequence: u64,
-) -> Instruction {
-    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
-
-    Instruction {
-        program_id: PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(*payer, true),               // payer, signer
-            AccountMeta::new_readonly(*authority, false), // authority, NOT a signer
-            AccountMeta::new(pda, false),                 // bitmap PDA
-            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
-        ],
-        data: build_instruction_data(IX_CREATE_BITMAP, namespace, sequence),
-    }
-}
-
-/// Build instruction to mark a sequence number as used
-pub fn mark_used_instruction(
-    payer: &Pubkey,
-    authority: &Pubkey,
-    namespace: &[u8],
-    sequence: u64,
-) -> Instruction {
-    let (pda, _bump) = derive_bitmap_pda(authority, namespace, sequence);
-
-    Instruction {
-        program_id: PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(*payer, true),              // payer, signer
-            AccountMeta::new_readonly(*authority, true), // authority, signer
-            AccountMeta::new(pda, false),                // bitmap PDA
-            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
-        ],
-        data: build_instruction_data(IX_MARK_USED, namespace, sequence),
-    }
-}
-
-/// Account size: 1 byte bump + 128 bytes bitmap = 129 bytes
-const ACCOUNT_SIZE: usize = 129;
-
-/// Rent cost for a bitmap PDA (129 bytes)
+/// Rent cost for a bitmap PDA
 pub fn rent_for_bitmap() -> u64 {
-    Rent::default().minimum_balance(ACCOUNT_SIZE)
+    Rent::default().minimum_balance(BITMAP_ACCOUNT_SIZE)
 }
 
 #[cfg(test)]
@@ -110,7 +23,11 @@ mod tests {
     use litesvm::LiteSVM;
     use proptest::prelude::*;
     use solana_sdk::{
-        native_token::LAMPORTS_PER_SOL, signature::Keypair, signer::Signer,
+        instruction::{AccountMeta, Instruction as SdkInstruction},
+        native_token::LAMPORTS_PER_SOL,
+        pubkey::Pubkey,
+        signature::Keypair,
+        signer::Signer,
         transaction::Transaction,
     };
 
@@ -131,12 +48,13 @@ mod tests {
         let balance_before = svm.get_balance(&authority.pubkey()).unwrap();
 
         // Execute transaction (authority is both payer and authority)
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
             namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -215,12 +133,13 @@ mod tests {
         svm.expire_blockhash();
 
         // Authority should still be able to claim this sequence
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
             namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -250,7 +169,12 @@ mod tests {
             svm.airdrop(&authority.pubkey(), 10_000_000_000).unwrap();
 
             // First use should succeed
-            let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -265,7 +189,12 @@ mod tests {
             svm.expire_blockhash();
 
             // Second use with same sequence should fail
-            let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -290,7 +219,12 @@ mod tests {
             svm.airdrop(&authority.pubkey(), 10_000_000_000).unwrap();
 
             // Use seq1
-            let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, seq1);
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence: seq1,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -305,7 +239,12 @@ mod tests {
             svm.expire_blockhash();
 
             // Using seq2 should still work (independent)
-            let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, seq2);
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence: seq2,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -331,7 +270,12 @@ mod tests {
             for i in 0..10u64 {
                 let sequence = base.saturating_add(i);
 
-                let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+                let ix = MarkUsed {
+                    payer: &authority.pubkey(),
+                    authority: &authority.pubkey(),
+                    namespace,
+                    sequence,
+                }.instruction();
                 let blockhash = svm.latest_blockhash();
                 let tx = Transaction::new_signed_with_payer(
                     &[ix],
@@ -349,7 +293,12 @@ mod tests {
             for i in 0..10u64 {
                 let sequence = base.saturating_add(i);
 
-                let ix = mark_used_instruction(&authority.pubkey(), &authority.pubkey(), namespace, sequence);
+                let ix = MarkUsed {
+                    payer: &authority.pubkey(),
+                    authority: &authority.pubkey(),
+                    namespace,
+                    sequence,
+                }.instruction();
                 let blockhash = svm.latest_blockhash();
                 let tx = Transaction::new_signed_with_payer(
                     &[ix],
@@ -377,7 +326,12 @@ mod tests {
             svm.airdrop(&authority2.pubkey(), 10_000_000_000).unwrap();
 
             // Authority 1 uses sequence
-            let ix = mark_used_instruction(&authority1.pubkey(), &authority1.pubkey(), namespace, sequence);
+            let ix = MarkUsed {
+                payer: &authority1.pubkey(),
+                authority: &authority1.pubkey(),
+                namespace,
+                sequence,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -392,7 +346,12 @@ mod tests {
             svm.expire_blockhash();
 
             // Authority 2 should still be able to use same sequence
-            let ix = mark_used_instruction(&authority2.pubkey(), &authority2.pubkey(), namespace, sequence);
+            let ix = MarkUsed {
+                payer: &authority2.pubkey(),
+                authority: &authority2.pubkey(),
+                namespace,
+                sequence,
+            }.instruction();
             let blockhash = svm.latest_blockhash();
             let tx = Transaction::new_signed_with_payer(
                 &[ix],
@@ -423,12 +382,13 @@ mod tests {
         let sequence = 42u64;
 
         // Use sequence in namespace1
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
-            namespace1,
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace: namespace1,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -441,12 +401,13 @@ mod tests {
         svm.expire_blockhash();
 
         // Same sequence in namespace2 should succeed (independent)
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
-            namespace2,
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace: namespace2,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -474,12 +435,13 @@ mod tests {
         let namespace: &[u8] = b"";
         let sequence = 1u64;
 
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
             namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -504,12 +466,13 @@ mod tests {
         let namespace = b"short_ns!!";
         let sequence = 1u64;
 
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
             namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -534,12 +497,13 @@ mod tests {
         let namespace = [0xABu8; 64];
         let sequence = 1u64;
 
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
-            &namespace,
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace: &namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -568,12 +532,13 @@ mod tests {
         let namespace = [0xCDu8; MAX_NAMESPACE_LEN];
         let sequence = 1u64;
 
-        let ix = mark_used_instruction(
-            &authority.pubkey(),
-            &authority.pubkey(),
-            &namespace,
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace: &namespace,
             sequence,
-        );
+        }
+        .instruction();
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -599,21 +564,14 @@ mod tests {
             .unwrap();
 
         // 65-byte namespace (one byte over maximum)
+        // Can't use MarkUsed helper because PDA derivation panics with oversized namespace
+        // (chunk 1 would be 33 bytes, exceeding Solana's 32-byte seed limit)
         let namespace = [0xEFu8; MAX_NAMESPACE_LEN + 1];
         let sequence = 1u64;
-
-        // Manually build instruction data without deriving PDA (since oversized namespace would panic)
-        let namespace_len = namespace.len() as u16;
-        let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
-        data.push(IX_MARK_USED); // discriminator
-        data.extend_from_slice(&namespace_len.to_le_bytes());
-        data.extend_from_slice(&namespace);
-        data.extend_from_slice(&sequence.to_le_bytes());
-
-        // Use a dummy PDA - the program will reject before PDA validation due to namespace length
+        let data = build_instruction_data(Instruction::MARK_USED, &namespace, sequence);
         let dummy_pda = Pubkey::new_unique();
 
-        let ix = Instruction {
+        let ix = SdkInstruction {
             program_id: PROGRAM_ID,
             accounts: vec![
                 AccountMeta::new(authority.pubkey(), true),
@@ -649,15 +607,9 @@ mod tests {
 
         // Create instruction but mark authority as non-signer
         let (pda, _bump) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
+        let data = build_instruction_data(Instruction::MARK_USED, namespace, sequence);
 
-        let namespace_len = namespace.len() as u16;
-        let mut data = Vec::with_capacity(1 + 2 + namespace.len() + 8);
-        data.push(IX_MARK_USED); // discriminator
-        data.extend_from_slice(&namespace_len.to_le_bytes());
-        data.extend_from_slice(namespace);
-        data.extend_from_slice(&sequence.to_le_bytes());
-
-        let ix = Instruction {
+        let ix = SdkInstruction {
             program_id: PROGRAM_ID,
             accounts: vec![
                 AccountMeta::new(payer.pubkey(), true), // payer, signer
@@ -692,7 +644,13 @@ mod tests {
         let namespace = b"test";
         let sequence = 1u64;
 
-        let ix = mark_used_instruction(&payer.pubkey(), &authority.pubkey(), namespace, sequence);
+        let ix = MarkUsed {
+            payer: &payer.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .instruction();
 
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(

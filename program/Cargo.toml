@@ -6,9 +6,14 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[features]
+default = []
+client = ["dep:solana-sdk"]
+
 [dependencies]
 pinocchio = { version = "0.10", features = ["cpi"] }
 pinocchio-system = "0.5"
+solana-sdk = { version = "2.2", optional = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
