@@ -1,12 +1,12 @@
-/// Bits per bitmap bucket (256 bits = 32 bytes)
-pub const BITS_PER_BUCKET: u64 = 256;
-/// Size of the bitmap in bytes
-pub const BITMAP_BYTES: usize = (BITS_PER_BUCKET / 8) as usize;
-/// Total account size: [bump: u8][bitmap: 32 bytes] = 33 bytes
+/// Size of the bitmap in bytes (128 bytes = 1024 bits)
+pub const BITMAP_BYTES: usize = 128;
+/// Bits per bitmap bucket (derived from BITMAP_BYTES)
+pub const BITS_PER_BUCKET: u64 = (BITMAP_BYTES * 8) as u64;
+/// Total account size: [bump: u8][bitmap: 128 bytes] = 129 bytes
 pub const BITMAP_ACCOUNT_SIZE: usize = 1 + BITMAP_BYTES;
 
 /// Zero-copy wrapper for bitmap account data.
-/// Layout: [bump: u8][bitmap: 32 bytes]
+/// Layout: [bump: u8][bitmap: 128 bytes]
 pub struct BitmapAccount<'a> {
     pub bump: &'a mut u8,
     pub bitmap: &'a mut [u8; BITMAP_BYTES],

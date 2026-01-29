@@ -10,8 +10,8 @@ pub const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("rep1ayXXXXXXXXXXXXXXXXXXXXXX
 const IX_CREATE_BITMAP: u8 = 0;
 const IX_MARK_USED: u8 = 1;
 
-/// Bits per bitmap bucket (must match program)
-pub const BITS_PER_BUCKET: u64 = 256;
+/// Bits per bitmap bucket (must match program: 128 bytes * 8 = 1024 bits)
+pub const BITS_PER_BUCKET: u64 = 1024;
 
 /// Maximum namespace length (2 chunks * 32 bytes = 64 bytes)
 pub const MAX_NAMESPACE_LEN: usize = 64;
@@ -96,10 +96,10 @@ pub fn mark_used_instruction(
     }
 }
 
-/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
-const ACCOUNT_SIZE: usize = 33;
+/// Account size: 1 byte bump + 128 bytes bitmap = 129 bytes
+const ACCOUNT_SIZE: usize = 129;
 
-/// Rent cost for a bitmap PDA (33 bytes)
+/// Rent cost for a bitmap PDA (129 bytes)
 pub fn rent_for_bitmap() -> u64 {
     Rent::default().minimum_balance(ACCOUNT_SIZE)
 }
