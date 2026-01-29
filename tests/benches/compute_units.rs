@@ -15,8 +15,8 @@ const SYSTEM_PROGRAM_ID: Pubkey = solana_pubkey::pubkey!("1111111111111111111111
 const IX_CREATE_BITMAP: u8 = 0;
 const IX_MARK_USED: u8 = 1;
 
-/// Account size: 1 byte bump + 32 bytes bitmap = 33 bytes
-const ACCOUNT_SIZE: usize = 33;
+/// Account size: 1 byte bump + 128 bytes bitmap = 129 bytes
+const ACCOUNT_SIZE: usize = 129;
 
 fn program_id() -> Pubkey {
     PROGRAM_ID.to_bytes().into()
