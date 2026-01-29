@@ -1,7 +1,22 @@
-.PHONY: build test test-docker bench bench-docker
+SOLANA_VERSION := $(shell cat .solana-version)
+INSTALLED_VERSION := $(shell solana --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
-build:
+.PHONY: build test test-docker bench bench-docker setup check-version
+
+build: check-version
 	cargo build-sbf --manifest-path program/Cargo.toml
+
+setup:
+	sh -c "$$(curl -sSfL https://release.anza.xyz/v$(SOLANA_VERSION)/install)"
+
+check-version:
+	@if [ "$(INSTALLED_VERSION)" != "$(SOLANA_VERSION)" ]; then \
+		echo "Error: Solana version mismatch"; \
+		echo "  Required: $(SOLANA_VERSION)"; \
+		echo "  Installed: $(INSTALLED_VERSION)"; \
+		echo "Run 'make setup' to install the correct version"; \
+		exit 1; \
+	fi
 
 test: build
 	cd tests && cargo test
