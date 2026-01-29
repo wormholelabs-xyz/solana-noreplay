@@ -5,6 +5,9 @@ pub mod pda;
 pub mod processor;
 pub mod state;
 
+#[cfg(feature = "client")]
+pub mod client;
+
 // Re-exports for convenience
 pub use instruction::Instruction;
 pub use pda::{derive_bitmap_pda, BitmapPdaSeeds, DerivePdaError};

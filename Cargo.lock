@@ -5002,6 +5002,7 @@ version = "0.1.0"
 dependencies = [
  "pinocchio",
  "pinocchio-system",
+ "solana-sdk",
 ]
 
 [[package]]
@@ -5014,6 +5015,7 @@ dependencies = [
  "proptest",
  "solana-account 3.3.0",
  "solana-instruction 3.1.0",
+ "solana-noreplay",
  "solana-pubkey 3.0.0",
  "solana-sdk",
 ]
