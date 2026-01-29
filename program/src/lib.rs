@@ -10,18 +10,106 @@ program_entrypoint!(process_instruction);
 no_allocator!();
 default_panic_handler!();
 
-/// Instruction discriminators
-const IX_CREATE_BITMAP: u8 = 0;
-const IX_MARK_USED: u8 = 1;
+/// Zero-copy instruction parser.
+/// Borrows namespace directly from instruction data.
+pub enum Instruction<'a> {
+    /// Create a bitmap PDA permissionlessly (discriminator = 0)
+    CreateBitmap { namespace: &'a [u8], sequence: u64 },
+    /// Mark a sequence number as used (discriminator = 1)
+    MarkUsed { namespace: &'a [u8], sequence: u64 },
+}
 
-/// Bits per bitmap PDA (256 bits = 32 bytes)
+impl<'a> Instruction<'a> {
+    const CREATE_BITMAP: u8 = 0;
+    const MARK_USED: u8 = 1;
+
+    /// Parse instruction data into an Instruction enum.
+    /// Zero-copy: namespace is a slice into the original data.
+    pub fn parse(data: &'a [u8]) -> Result<Self, ProgramError> {
+        // Minimum: 1 (discriminator) + 2 (namespace_len) + 0 (empty namespace) + 8 (sequence)
+        if data.len() < 11 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let discriminator = data[0];
+        let payload = &data[1..];
+
+        let namespace_len = u16::from_le_bytes(payload[0..2].try_into().unwrap()) as usize;
+
+        if namespace_len > MAX_NAMESPACE_LEN {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        if payload.len() != 2 + namespace_len + 8 {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+
+        let namespace = &payload[2..2 + namespace_len];
+        let sequence = u64::from_le_bytes(payload[2 + namespace_len..].try_into().unwrap());
+
+        match discriminator {
+            Self::CREATE_BITMAP => Ok(Instruction::CreateBitmap {
+                namespace,
+                sequence,
+            }),
+            Self::MARK_USED => Ok(Instruction::MarkUsed {
+                namespace,
+                sequence,
+            }),
+            _ => Err(ProgramError::InvalidInstructionData),
+        }
+    }
+}
+
+/// Bits per bitmap bucket (256 bits = 32 bytes)
 pub const BITS_PER_BUCKET: u64 = 256;
-const BITMAP_BYTES: usize = (BITS_PER_BUCKET / 8) as usize; // 32
+/// Size of the bitmap in bytes
+pub const BITMAP_BYTES: usize = (BITS_PER_BUCKET / 8) as usize;
+/// Total account size: [bump: u8][bitmap: 32 bytes] = 33 bytes
+pub const BITMAP_ACCOUNT_SIZE: usize = 1 + BITMAP_BYTES;
 
-/// Account layout: [bump: u8][bitmap: 32 bytes] = 33 bytes total
-const BUMP_OFFSET: usize = 0;
-const BITMAP_OFFSET: usize = 1;
-const ACCOUNT_SIZE: usize = 1 + BITMAP_BYTES; // 33
+/// Zero-copy wrapper for bitmap account data.
+/// Layout: [bump: u8][bitmap: 32 bytes]
+pub struct BitmapAccount<'a> {
+    pub bump: &'a mut u8,
+    pub bitmap: &'a mut [u8; BITMAP_BYTES],
+}
+
+impl<'a> BitmapAccount<'a> {
+    /// Wrap account data. Returns None if data is too small.
+    #[inline]
+    pub fn from_slice(data: &'a mut [u8]) -> Option<Self> {
+        if data.len() < BITMAP_ACCOUNT_SIZE {
+            return None;
+        }
+        let (bump, rest) = data.split_at_mut(1);
+        let bitmap = <&mut [u8; BITMAP_BYTES]>::try_from(&mut rest[..BITMAP_BYTES]).ok()?;
+        Some(Self {
+            bump: &mut bump[0],
+            bitmap,
+        })
+    }
+
+    /// Check if a sequence number is marked as used.
+    #[inline]
+    pub fn is_used(&self, sequence: u64) -> bool {
+        let bit_index = (sequence % BITS_PER_BUCKET) as usize;
+        let byte_index = bit_index / 8;
+        let bit_offset = bit_index % 8;
+        self.bitmap[byte_index] & (1 << bit_offset) != 0
+    }
+
+    /// Mark a sequence number as used. Returns true if it was already used.
+    #[inline]
+    pub fn mark_used(&mut self, sequence: u64) -> bool {
+        let bit_index = (sequence % BITS_PER_BUCKET) as usize;
+        let byte_index = bit_index / 8;
+        let bit_offset = bit_index % 8;
+        let was_used = self.bitmap[byte_index] & (1 << bit_offset) != 0;
+        self.bitmap[byte_index] |= 1 << bit_offset;
+        was_used
+    }
+}
 
 /// Maximum namespace length (2 chunks * 32 bytes = 64 bytes)
 /// Seeds: [authority (32), ns_chunk_0, ns_chunk_1, bucket_index (8)]
@@ -77,30 +165,6 @@ fn create_pda<'a>(
     Ok(())
 }
 
-/// Parse instruction data after discriminator.
-/// Returns (namespace, sequence) or error.
-fn parse_instruction_data(data: &[u8]) -> Result<(&[u8], u64), ProgramError> {
-    // Minimum: 2 (len) + 0 (empty namespace) + 8 (sequence)
-    if data.len() < 10 {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-
-    let namespace_len = u16::from_le_bytes(data[0..2].try_into().unwrap()) as usize;
-
-    if namespace_len > MAX_NAMESPACE_LEN {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-
-    if data.len() != 2 + namespace_len + 8 {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-
-    let namespace = &data[2..2 + namespace_len];
-    let sequence = u64::from_le_bytes(data[2 + namespace_len..].try_into().unwrap());
-
-    Ok((namespace, sequence))
-}
-
 /// Build signer seeds for PDA.
 fn build_signer<'a>(
     authority: &'a [u8],
@@ -140,13 +204,21 @@ fn init_bitmap_pda<'a>(
         let signer_seeds = build_signer(authority.address().as_ref(), pda_seeds, &bump_seed);
         let signers = [Signer::from(signer_seeds.as_ref())];
 
-        create_pda(payer, bitmap_pda, program_id, ACCOUNT_SIZE as u64, &signers)?;
+        create_pda(
+            payer,
+            bitmap_pda,
+            program_id,
+            BITMAP_ACCOUNT_SIZE as u64,
+            &signers,
+        )?;
 
         // Store bump in the account
         // SAFETY: We have exclusive write access to the PDA data after creation/validation.
         // No other references exist.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
-        account_data[BUMP_OFFSET] = bump;
+        let bitmap =
+            BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
+        *bitmap.bump = bump;
 
         Ok(bump)
     } else {
@@ -154,7 +226,9 @@ fn init_bitmap_pda<'a>(
         // SAFETY: We have exclusive write access to the PDA data after creation/validation.
         // No other references exist.
         let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
-        let bump = account_data[BUMP_OFFSET];
+        let bitmap =
+            BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
+        let bump = *bitmap.bump;
 
         let bump_slice = [bump];
         let seeds = pda_seeds.as_seeds_with_bump(authority.address().as_ref(), &bump_slice);
@@ -174,14 +248,15 @@ fn process_instruction(
     accounts: &[AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if instruction_data.is_empty() {
-        return Err(ProgramError::InvalidInstructionData);
-    }
-
-    match instruction_data[0] {
-        IX_CREATE_BITMAP => process_create_bitmap(program_id, accounts, &instruction_data[1..]),
-        IX_MARK_USED => process_mark_used(program_id, accounts, &instruction_data[1..]),
-        _ => Err(ProgramError::InvalidInstructionData),
+    match Instruction::parse(instruction_data)? {
+        Instruction::CreateBitmap {
+            namespace,
+            sequence,
+        } => process_create_bitmap(program_id, accounts, namespace, sequence),
+        Instruction::MarkUsed {
+            namespace,
+            sequence,
+        } => process_mark_used(program_id, accounts, namespace, sequence),
     }
 }
 
@@ -206,7 +281,8 @@ fn process_instruction(
 fn process_create_bitmap(
     program_id: &Address,
     accounts: &[AccountView],
-    data: &[u8],
+    namespace: &[u8],
+    sequence: u64,
 ) -> ProgramResult {
     let [payer, authority, bitmap_pda, _system_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
@@ -218,7 +294,6 @@ fn process_create_bitmap(
 
     // Authority does NOT need to sign - this is permissionless
 
-    let (namespace, sequence) = parse_instruction_data(data)?;
     let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
 
     init_bitmap_pda(payer, authority, bitmap_pda, &pda_seeds, program_id)?;
@@ -241,7 +316,12 @@ fn process_create_bitmap(
 /// | 1      | 2    | namespace_len (u16 LE) |
 /// | 3      | var  | namespace (0-64 bytes) |
 /// | 3+len  | 8    | sequence (u64 LE) |
-fn process_mark_used(program_id: &Address, accounts: &[AccountView], data: &[u8]) -> ProgramResult {
+fn process_mark_used(
+    program_id: &Address,
+    accounts: &[AccountView],
+    namespace: &[u8],
+    sequence: u64,
+) -> ProgramResult {
     let [payer, authority, bitmap_pda, _system_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
@@ -255,13 +335,6 @@ fn process_mark_used(program_id: &Address, accounts: &[AccountView], data: &[u8]
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    let (namespace, sequence) = parse_instruction_data(data)?;
-
-    // Calculate bit position within bucket (offset by BITMAP_OFFSET in account data)
-    let bit_index = (sequence % BITS_PER_BUCKET) as usize;
-    let byte_index = BITMAP_OFFSET + bit_index / 8;
-    let bit_offset = bit_index % 8;
-
     let pda_seeds = BitmapPdaSeeds::new(namespace, sequence);
 
     // Initialize PDA if needed (also verifies PDA is correct)
@@ -271,14 +344,13 @@ fn process_mark_used(program_id: &Address, accounts: &[AccountView], data: &[u8]
     // SAFETY: We have exclusive write access to the PDA data after creation/validation.
     // No other references exist.
     let account_data = unsafe { bitmap_pda.borrow_unchecked_mut() };
+    let mut bitmap =
+        BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
 
-    // Check if bit is already set (replay protection)
-    if account_data[byte_index] & (1 << bit_offset) != 0 {
+    // Mark sequence as used, fail if already used (replay protection)
+    if bitmap.mark_used(sequence) {
         return Err(ProgramError::AccountAlreadyInitialized);
     }
-
-    // Set the bit to mark sequence as used
-    account_data[byte_index] |= 1 << bit_offset;
 
     Ok(())
 }
