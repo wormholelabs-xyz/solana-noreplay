@@ -1,9 +1,4 @@
 //! Instruction definitions and parsing for the NoReplay program.
-//!
-//! Uses the TryFrom pattern for validation:
-//! - Account validation (signer checks, destructuring) in `TryFrom<&[AccountView]>`
-//! - Data validation (parsing, length checks) in `TryFrom<&[u8]>`
-//! - Composed instruction validation in `TryFrom<(&[u8], &[AccountView])>`
 
 use pinocchio::{error::ProgramError, AccountView};
 
