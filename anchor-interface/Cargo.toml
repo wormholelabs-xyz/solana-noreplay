@@ -1,0 +1,13 @@
+[package]
+name = "solana-noreplay-interface"
+version = "0.1.0"
+description = "Anchor Interface for Solana NoReplay Program"
+edition = "2021"
+
+[features]
+default = []
+cpi = []
+
+[dependencies]
+# Wide version bounds for compatibility with any anchor version
+anchor-lang = { version = "0" }

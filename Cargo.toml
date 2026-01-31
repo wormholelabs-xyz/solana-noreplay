@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["program", "tests"]
+# Exclude anchor-interface from workspace - it has different dependency requirements
+# and needs to build with its own Cargo.lock (inherited from consumer workspace)
+exclude = ["anchor-interface"]
 
 # Note: `cargo build` will fail for program (uses Solana syscalls)
 # Build program with: cargo build-sbf --manifest-path program/Cargo.toml
+# The anchor-interface is built when consumed by other projects (e.g. xrpl-sequencer)
