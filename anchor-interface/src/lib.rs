@@ -34,8 +34,11 @@ use anchor_lang::solana_program::{
     program::invoke_signed,
 };
 
-// Program ID placeholder - update after deployment
-declare_id!("rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+pub static ID: Pubkey = id();
+
+pub const fn id() -> Pubkey {
+    Pubkey::from_str_const(env!("NOREPLAY_PROGRAM_ID"))
+}
 
 /// Instruction discriminators (must match the Pinocchio program).
 pub const CREATE_BITMAP: u8 = 0;

@@ -1,7 +1,7 @@
 SOLANA_VERSION := $(shell cat .solana-version)
 INSTALLED_VERSION := $(shell solana --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 
-.PHONY: build test test-docker bench bench-docker setup check-version
+.PHONY: build build-verifiable test test-docker bench bench-docker setup check-version deploy program-info
 
 build: check-version
 	cargo build-sbf --manifest-path program/Cargo.toml
@@ -29,3 +29,14 @@ test-docker:
 
 bench-docker:
 	docker build --platform linux/amd64 --target bench -f .devcontainer/Dockerfile .
+
+build-verifiable: check-version
+	solana-verify build --library-name solana_noreplay \
+		--base-image solanafoundation/solana-verifiable-build:3.0.7
+
+deploy: build-verifiable
+	./scripts/deploy.sh
+
+program-info:
+	@test -n "$${PROGRAM_ID:-}" || { echo "ERROR: PROGRAM_ID env var is required"; exit 1; }
+	solana program show $${PROGRAM_ID} -u $${SOLANA_RPC_URL:-https://api.devnet.solana.com}

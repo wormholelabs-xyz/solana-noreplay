@@ -30,8 +30,8 @@ use solana_sdk::{
     system_program,
 };
 
-/// Program ID for the NoReplay program.
-pub const PROGRAM_ID: Pubkey = solana_sdk::pubkey!("rep1ayXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
+/// Program ID for the NoReplay program (set via `NOREPLAY_PROGRAM_ID` env var at compile time).
+pub const PROGRAM_ID: Pubkey = Pubkey::from_str_const(env!("NOREPLAY_PROGRAM_ID"));
 
 /// Size of each seed component for namespace chunking.
 const SEED_CHUNK_SIZE: usize = 32;
