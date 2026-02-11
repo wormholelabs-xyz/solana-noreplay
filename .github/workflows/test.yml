@@ -20,6 +20,8 @@ jobs:
       - run: rustup component add clippy
       - name: Run clippy on tests
         run: cargo clippy -p solana-noreplay-tests --all-targets -- -D warnings
+        env:
+          NOREPLAY_PROGRAM_ID: repMHgR5BEpGLeZvM5iGoNNDPw4eu2BS6sXJzaC8K4t
 
   test:
     runs-on: ubuntu-latest

@@ -83,6 +83,8 @@ FROM solana-dev AS test
 
 WORKDIR /workspace
 
+ENV NOREPLAY_PROGRAM_ID=repMHgR5BEpGLeZvM5iGoNNDPw4eu2BS6sXJzaC8K4t
+
 # Copy manifests and test code
 COPY --chown=node:node Cargo.toml Cargo.lock* ./
 COPY --chown=node:node program program
@@ -103,6 +105,8 @@ RUN --mount=type=cache,target=/home/node/.cargo/registry,uid=1000,gid=1000 \
 FROM solana-dev AS bench
 
 WORKDIR /workspace
+
+ENV NOREPLAY_PROGRAM_ID=repMHgR5BEpGLeZvM5iGoNNDPw4eu2BS6sXJzaC8K4t
 
 # Copy manifests and test/bench code
 COPY --chown=node:node Cargo.toml Cargo.lock* ./
