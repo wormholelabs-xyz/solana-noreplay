@@ -3,7 +3,7 @@ use solana_sdk::rent::Rent;
 // Re-export from the program's client module
 pub use solana_noreplay::client::{
     build_instruction_data, derive_bitmap_pda, CreateBitmap, MarkUsed, BITMAP_ACCOUNT_SIZE,
-    BITS_PER_BUCKET, CREATE_BITMAP, MARK_USED, MAX_NAMESPACE_LEN, PROGRAM_ID,
+    BITS_PER_BUCKET, CREATE_BITMAP, MARK_USED, MAX_NAMESPACE_LEN, PROGRAM_ID, UNMARK_USED,
 };
 
 pub fn load_program() -> Vec<u8> {
@@ -628,6 +628,342 @@ mod tests {
         );
         let result = svm.send_transaction(tx);
         assert!(result.is_err(), "Should fail when authority doesn't sign");
+    }
+
+    // ============================================================================
+    // UnmarkUsed tests
+    // ============================================================================
+
+    #[test]
+    fn unmark_clears_previously_marked_bit() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+        let sequence = 42u64;
+
+        // Mark it first
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(svm.send_transaction(tx).is_ok());
+
+        svm.expire_blockhash();
+
+        // Verify it's marked (replay should fail)
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(svm.send_transaction(tx).is_err(), "Should be marked");
+
+        svm.expire_blockhash();
+
+        // Unmark it
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .unmark_instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        let result = svm.send_transaction(tx);
+        assert!(result.is_ok(), "Unmark should succeed: {:?}", result);
+
+        // Check return data: should be 1 (was modified)
+        let return_data = result.unwrap().return_data;
+        assert_eq!(
+            return_data.data.as_slice(),
+            &[1u8],
+            "Return data should indicate bit was modified"
+        );
+
+        svm.expire_blockhash();
+
+        // Now marking again should succeed (bit was cleared)
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        let result = svm.send_transaction(tx);
+        assert!(
+            result.is_ok(),
+            "Mark should succeed after unmark: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn unmark_on_already_clear_bit_returns_not_modified() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+        let sequence = 99u64;
+
+        // Unmark without ever marking - should succeed with was_modified=false
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .unmark_instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        let result = svm.send_transaction(tx);
+        assert!(
+            result.is_ok(),
+            "Unmark on clear bit should succeed: {:?}",
+            result
+        );
+
+        let return_data = result.unwrap().return_data;
+        assert_eq!(
+            return_data.data.as_slice(),
+            &[0u8],
+            "Return data should indicate bit was NOT modified"
+        );
+    }
+
+    #[test]
+    fn unmark_requires_authority_signature() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let payer = Keypair::new();
+        let authority = Keypair::new();
+        svm.airdrop(&payer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+        let namespace = b"test";
+        let sequence = 1u64;
+
+        // Create instruction but mark authority as non-signer
+        let (pda, _bump) = derive_bitmap_pda(&authority.pubkey(), namespace, sequence);
+        let data = build_instruction_data(UNMARK_USED, namespace, sequence);
+
+        let ix = SdkInstruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new_readonly(authority.pubkey(), false), // NOT a signer!
+                AccountMeta::new(pda, false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data,
+        };
+
+        let blockhash = svm.latest_blockhash();
+        let tx =
+            Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[&payer], blockhash);
+        let result = svm.send_transaction(tx);
+        assert!(result.is_err(), "Should fail when authority doesn't sign");
+    }
+
+    #[test]
+    fn unmark_idempotent() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+        let sequence = 7u64;
+
+        // Mark it
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(svm.send_transaction(tx).is_ok());
+
+        svm.expire_blockhash();
+
+        // Unmark it twice - both should succeed
+        for expected_modified in [1u8, 0u8] {
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence,
+            }
+            .unmark_instruction();
+            let blockhash = svm.latest_blockhash();
+            let tx = Transaction::new_signed_with_payer(
+                &[ix],
+                Some(&authority.pubkey()),
+                &[&authority],
+                blockhash,
+            );
+            let result = svm.send_transaction(tx);
+            assert!(result.is_ok(), "Unmark should always succeed");
+
+            let return_data = result.unwrap().return_data;
+            assert_eq!(
+                return_data.data.as_slice(),
+                &[expected_modified],
+                "Expected modified={} on iteration",
+                expected_modified
+            );
+
+            svm.expire_blockhash();
+        }
+    }
+
+    #[test]
+    fn unmark_does_not_affect_other_bits() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+
+        // Mark sequences 10 and 11 (same bucket)
+        for seq in [10u64, 11u64] {
+            let ix = MarkUsed {
+                payer: &authority.pubkey(),
+                authority: &authority.pubkey(),
+                namespace,
+                sequence: seq,
+            }
+            .instruction();
+            let blockhash = svm.latest_blockhash();
+            let tx = Transaction::new_signed_with_payer(
+                &[ix],
+                Some(&authority.pubkey()),
+                &[&authority],
+                blockhash,
+            );
+            assert!(svm.send_transaction(tx).is_ok());
+            svm.expire_blockhash();
+        }
+
+        // Unmark only sequence 10
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence: 10,
+        }
+        .unmark_instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(svm.send_transaction(tx).is_ok());
+
+        svm.expire_blockhash();
+
+        // Sequence 10 should be re-markable
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence: 10,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(
+            svm.send_transaction(tx).is_ok(),
+            "Sequence 10 should be re-markable after unmark"
+        );
+
+        svm.expire_blockhash();
+
+        // Sequence 11 should still be marked (replay fails)
+        let ix = MarkUsed {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            sequence: 11,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[&authority],
+            blockhash,
+        );
+        assert!(
+            svm.send_transaction(tx).is_err(),
+            "Sequence 11 should still be marked"
+        );
     }
 
     #[test]

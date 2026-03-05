@@ -9,7 +9,9 @@ pub mod state;
 pub mod client;
 
 // Re-exports for convenience
-pub use instruction::{CreateBitmap, InstructionData, MarkUsed, CREATE_BITMAP, MARK_USED};
+pub use instruction::{
+    CreateBitmap, InstructionData, MarkUsed, CREATE_BITMAP, MARK_USED, UNMARK_USED,
+};
 pub use pda::{derive_bitmap_pda, BitmapPdaSeeds, DerivePdaError};
 pub use state::{BitmapAccount, BITMAP_ACCOUNT_SIZE, BITMAP_BYTES, BITS_PER_BUCKET};
 

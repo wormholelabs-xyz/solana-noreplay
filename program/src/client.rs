@@ -162,6 +162,18 @@ pub struct MarkUsed<'a> {
 impl MarkUsed<'_> {
     /// Build the MarkUsed instruction.
     pub fn instruction(&self) -> Instruction {
+        self.instruction_with_discriminator(crate::instruction::MARK_USED)
+    }
+
+    /// Build the UnmarkUsed instruction (same accounts/data, different discriminator).
+    ///
+    /// Clears a sequence number's replay protection bit. Returns a bool via
+    /// return data indicating whether the bit was actually modified.
+    pub fn unmark_instruction(&self) -> Instruction {
+        self.instruction_with_discriminator(crate::instruction::UNMARK_USED)
+    }
+
+    fn instruction_with_discriminator(&self, discriminator: u8) -> Instruction {
         let (pda, _bump) = derive_bitmap_pda(self.authority, self.namespace, self.sequence);
 
         Instruction {
@@ -172,11 +184,7 @@ impl MarkUsed<'_> {
                 AccountMeta::new(pda, false),
                 AccountMeta::new_readonly(system_program::ID, false),
             ],
-            data: build_instruction_data(
-                crate::instruction::MARK_USED,
-                self.namespace,
-                self.sequence,
-            ),
+            data: build_instruction_data(discriminator, self.namespace, self.sequence),
         }
     }
 
@@ -187,6 +195,6 @@ impl MarkUsed<'_> {
 }
 
 // Re-export useful constants for clients
-pub use crate::instruction::{CREATE_BITMAP, MARK_USED};
+pub use crate::instruction::{CREATE_BITMAP, MARK_USED, UNMARK_USED};
 pub use crate::state::{BITMAP_ACCOUNT_SIZE, BITS_PER_BUCKET};
 pub use crate::MAX_NAMESPACE_LEN;

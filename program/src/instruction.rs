@@ -7,6 +7,7 @@ use crate::MAX_NAMESPACE_LEN;
 /// Instruction discriminators.
 pub const CREATE_BITMAP: u8 = 0;
 pub const MARK_USED: u8 = 1;
+pub const UNMARK_USED: u8 = 2;
 
 // =============================================================================
 // CreateBitmap

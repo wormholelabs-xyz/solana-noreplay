@@ -5,7 +5,7 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
-use crate::instruction::{CreateBitmap, MarkUsed, CREATE_BITMAP, MARK_USED};
+use crate::instruction::{CreateBitmap, MarkUsed, CREATE_BITMAP, MARK_USED, UNMARK_USED};
 use crate::pda::BitmapPdaSeeds;
 use crate::state::{BitmapAccount, BITMAP_ACCOUNT_SIZE};
 
@@ -20,6 +20,9 @@ pub fn process_instruction(
             CreateBitmap::try_from((data, accounts))?.process(program_id)
         }
         Some((&MARK_USED, data)) => MarkUsed::try_from((data, accounts))?.process(program_id),
+        Some((&UNMARK_USED, data)) => {
+            MarkUsed::try_from((data, accounts))?.process_unmark(program_id)
+        }
         _ => Err(ProgramError::InvalidInstructionData),
     }
 }
@@ -90,7 +93,7 @@ fn build_signer<'a>(
 
 /// Initialize a bitmap PDA if it doesn't exist yet, and verify the PDA is correct.
 /// Returns the bump seed (either from creation or from existing account).
-fn init_bitmap_pda<'a>(
+fn verify_bitmap_pda_and_init_if_needed<'a>(
     payer: &'a AccountView,
     authority: &'a AccountView,
     bitmap_pda: &'a AccountView,
@@ -163,7 +166,7 @@ impl CreateBitmap<'_> {
     pub fn process(&self, program_id: &Address) -> ProgramResult {
         let pda_seeds = BitmapPdaSeeds::new(self.data.namespace, self.data.sequence);
 
-        init_bitmap_pda(
+        verify_bitmap_pda_and_init_if_needed(
             self.accounts.payer,
             self.accounts.authority,
             self.accounts.bitmap_pda,
@@ -183,8 +186,7 @@ impl MarkUsed<'_> {
     pub fn process(&self, program_id: &Address) -> ProgramResult {
         let pda_seeds = BitmapPdaSeeds::new(self.data.namespace, self.data.sequence);
 
-        // Initialize PDA if needed (also verifies PDA is correct)
-        init_bitmap_pda(
+        verify_bitmap_pda_and_init_if_needed(
             self.accounts.payer,
             self.accounts.authority,
             self.accounts.bitmap_pda,
@@ -203,6 +205,33 @@ impl MarkUsed<'_> {
         if bitmap.mark_used(self.data.sequence) {
             return Err(ProgramError::AccountAlreadyInitialized);
         }
+
+        Ok(())
+    }
+
+    /// Process UnmarkUsed instruction.
+    ///
+    /// Clears a sequence number's replay protection bit. Always succeeds
+    /// (even if already cleared). Sets return data to a single byte:
+    /// 1 if the bit was modified, 0 if it was already clear.
+    pub fn process_unmark(&self, program_id: &Address) -> ProgramResult {
+        let pda_seeds = BitmapPdaSeeds::new(self.data.namespace, self.data.sequence);
+
+        verify_bitmap_pda_and_init_if_needed(
+            self.accounts.payer,
+            self.accounts.authority,
+            self.accounts.bitmap_pda,
+            &pda_seeds,
+            program_id,
+        )?;
+
+        // SAFETY: We have exclusive write access to the PDA data after creation/validation.
+        let account_data = unsafe { self.accounts.bitmap_pda.borrow_unchecked_mut() };
+        let mut bitmap =
+            BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
+
+        let was_modified = bitmap.mark_unused(self.data.sequence);
+        pinocchio::cpi::set_return_data(&[was_modified as u8]);
 
         Ok(())
     }

@@ -46,4 +46,15 @@ impl<'a> BitmapAccount<'a> {
         self.bitmap[byte_index] |= 1 << bit_offset;
         was_used
     }
+
+    /// Unmark a sequence number (clear the bit). Returns true if it was modified (was previously set).
+    #[inline]
+    pub fn mark_unused(&mut self, sequence: u64) -> bool {
+        let was_used = self.is_used(sequence);
+        let bit_index = (sequence % BITS_PER_BUCKET) as usize;
+        let byte_index = bit_index / 8;
+        let bit_offset = bit_index % 8;
+        self.bitmap[byte_index] &= !(1 << bit_offset);
+        was_used
+    }
 }
