@@ -66,7 +66,7 @@ if [[ "$CLUSTER" == mainnet* ]]; then
 fi
 
 # Detect initial deploy vs upgrade
-if solana program show "$PROGRAM_ID" "${SOLANA_FLAGS[@]}" &>/dev/null; then
+if solana program show "$PROGRAM_ID" -u "$RPC_URL" &>/dev/null; then
     echo "Program exists on-chain, upgrading..."
     solana program deploy \
         "${SOLANA_FLAGS[@]}" \
