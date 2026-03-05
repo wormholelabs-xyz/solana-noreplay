@@ -43,6 +43,7 @@ pub const fn id() -> Pubkey {
 /// Instruction discriminators (must match the Pinocchio program).
 pub const CREATE_BITMAP: u8 = 0;
 pub const MARK_USED: u8 = 1;
+pub const UNMARK_USED: u8 = 2;
 
 /// Maximum namespace length (64 bytes = 2 chunks of 32 bytes).
 pub const MAX_NAMESPACE_LEN: usize = 64;
@@ -203,6 +204,66 @@ pub mod cpi {
             program_id: crate::ID,
             accounts: ctx.accounts.to_account_metas(None),
             data: build_instruction_data(MARK_USED, namespace, sequence),
+        };
+
+        invoke_signed(&ix, &ctx.accounts.to_account_infos(), ctx.signer_seeds)?;
+
+        Ok(())
+    }
+
+    /// Accounts for the UnmarkUsed instruction.
+    ///
+    /// Clears a sequence number's replay protection bit. Authority MUST sign.
+    /// Always succeeds (even if bit was already clear).
+    pub struct UnmarkUsed<'info> {
+        /// Pays for PDA creation if the bitmap doesn't exist yet.
+        pub payer: AccountInfo<'info>,
+
+        /// Authority for the replay protection namespace (MUST sign).
+        pub authority: AccountInfo<'info>,
+
+        /// Bitmap PDA storing the used bits.
+        pub bitmap: AccountInfo<'info>,
+
+        /// System program for account creation if needed.
+        pub system_program: AccountInfo<'info>,
+    }
+
+    impl<'info> ToAccountMetas for UnmarkUsed<'info> {
+        fn to_account_metas(&self, _is_signer: Option<bool>) -> Vec<AccountMeta> {
+            vec![
+                AccountMeta::new(*self.payer.key, true),
+                AccountMeta::new_readonly(*self.authority.key, true),
+                AccountMeta::new(*self.bitmap.key, false),
+                AccountMeta::new_readonly(*self.system_program.key, false),
+            ]
+        }
+    }
+
+    impl<'info> ToAccountInfos<'info> for UnmarkUsed<'info> {
+        fn to_account_infos(&self) -> Vec<AccountInfo<'info>> {
+            vec![
+                self.payer.clone(),
+                self.authority.clone(),
+                self.bitmap.clone(),
+                self.system_program.clone(),
+            ]
+        }
+    }
+
+    /// Clear a sequence number's replay protection bit.
+    ///
+    /// The authority MUST sign. Always succeeds even if the bit was already clear.
+    /// Used to allow retry of failed XRPL transactions.
+    pub fn unmark_used<'info>(
+        ctx: CpiContext<'_, '_, '_, 'info, UnmarkUsed<'info>>,
+        namespace: &[u8],
+        sequence: u64,
+    ) -> Result<()> {
+        let ix = Instruction {
+            program_id: crate::ID,
+            accounts: ctx.accounts.to_account_metas(None),
+            data: build_instruction_data(UNMARK_USED, namespace, sequence),
         };
 
         invoke_signed(&ix, &ctx.accounts.to_account_infos(), ctx.signer_seeds)?;
