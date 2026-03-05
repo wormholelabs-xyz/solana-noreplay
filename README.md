@@ -93,7 +93,7 @@ In CPI contexts, the **authority** is typically a PDA of the calling program (wh
 
 ### Instructions
 
-The program supports two instructions:
+The program supports three instructions:
 
 #### CreateBitmap (discriminator = 0)
 
@@ -103,13 +103,17 @@ Permissionlessly creates a bitmap PDA. Anyone can call this to pre-create and fu
 
 Marks a sequence number as used. Authority **must** sign to prevent DOS attacks where adversaries mark sequences as used for other users.
 
+#### UnmarkUsed (discriminator = 2)
+
+Clears a sequence number's replay protection bit, allowing it to be marked again. Same ACL as `MarkUsed`: authority **must** sign. Always succeeds (even if the bit was already clear). Returns a single byte via [return data](https://solana.com/docs/core/cpi#return-data): `1` if the bit was modified (was set, now cleared), `0` if it was already clear.
+
 ### Instruction data format
 
 ```
 [discriminator: u8][namespace_len: u16 LE][namespace: 0-64 bytes][sequence: u64 LE]
 ```
 
-- `discriminator`: 0 for CreateBitmap, 1 for MarkUsed
+- `discriminator`: 0 for CreateBitmap, 1 for MarkUsed, 2 for UnmarkUsed
 - `namespace`: deterministic, application-specific identifier (max 64 bytes)
 - `sequence`: the sequence number to mark/create bucket for
 
