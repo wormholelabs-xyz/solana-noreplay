@@ -136,8 +136,9 @@ impl<'a> TryFrom<&'a [AccountView]> for MarkUsedAccounts<'a> {
             return Err(ProgramError::MissingRequiredSignature);
         }
 
-        // Authority MUST sign to prevent DOS attacks where adversaries
-        // mark sequences as used for other users
+        // Authority signer enforces authorization: the bitmap PDA is
+        // derived from the authority address, so only the namespace owner
+        // can mark sequences as used in their namespace.
         if !authority.is_signer() {
             return Err(ProgramError::MissingRequiredSignature);
         }
