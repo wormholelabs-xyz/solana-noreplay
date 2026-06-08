@@ -4,8 +4,7 @@ use solana_sdk::rent::Rent;
 pub use solana_noreplay::client::{
     build_instruction_data, derive_bitmap_pda, derive_bitmap_pda_for_bucket, CreateBitmap,
     MarkUsed, MarkUsedBulk, BITMAP_ACCOUNT_SIZE, BITMAP_BYTES, BITS_PER_BUCKET, CREATE_BITMAP,
-    MARK_USED, MARK_USED_BULK, MARK_USED_BULK_MASK_LEN, MAX_NAMESPACE_LEN, PROGRAM_ID,
-    UNMARK_USED,
+    MARK_USED, MARK_USED_BULK, MARK_USED_BULK_MASK_LEN, MAX_NAMESPACE_LEN, PROGRAM_ID, UNMARK_USED,
 };
 
 pub fn load_program() -> Vec<u8> {
@@ -1009,13 +1008,15 @@ mod tests {
     // ============================================================================
 
     /// Helper: send a `MarkUsedBulk` ix in a single-payer/authority transaction.
+    #[allow(clippy::result_large_err)]
     fn send_mark_used_bulk(
         svm: &mut LiteSVM,
         authority: &Keypair,
         namespace: &[u8],
         bucket_index: u64,
         or_mask: &[u8; MARK_USED_BULK_MASK_LEN],
-    ) -> Result<litesvm::types::TransactionMetadata, litesvm::types::FailedTransactionMetadata> {
+    ) -> Result<litesvm::types::TransactionMetadata, litesvm::types::FailedTransactionMetadata>
+    {
         let ix = MarkUsedBulk {
             payer: &authority.pubkey(),
             authority: &authority.pubkey(),

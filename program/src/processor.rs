@@ -5,7 +5,9 @@ use pinocchio::{
 };
 use pinocchio_system::instructions::{Allocate, Assign, CreateAccount, Transfer};
 
-use crate::instruction::{CreateBitmap, MarkUsed, CREATE_BITMAP, MARK_USED, UNMARK_USED};
+use crate::instruction::{
+    CreateBitmap, MarkUsed, MarkUsedBulk, CREATE_BITMAP, MARK_USED, MARK_USED_BULK, UNMARK_USED,
+};
 use crate::pda::BitmapPdaSeeds;
 use crate::state::{BitmapAccount, BITMAP_ACCOUNT_SIZE};
 
@@ -22,6 +24,9 @@ pub fn process_instruction(
         Some((&MARK_USED, data)) => MarkUsed::try_from((data, accounts))?.process(program_id),
         Some((&UNMARK_USED, data)) => {
             MarkUsed::try_from((data, accounts))?.process_unmark(program_id)
+        }
+        Some((&MARK_USED_BULK, data)) => {
+            MarkUsedBulk::try_from((data, accounts))?.process(program_id)
         }
         _ => Err(ProgramError::InvalidInstructionData),
     }
@@ -232,6 +237,42 @@ impl MarkUsed<'_> {
 
         let was_modified = bitmap.mark_unused(self.data.sequence);
         pinocchio::cpi::set_return_data(&[was_modified as u8]);
+
+        Ok(())
+    }
+}
+
+impl MarkUsedBulk<'_> {
+    /// Process MarkUsedBulk instruction.
+    ///
+    /// OR-merges a 128-byte mask into the bitmap for a single bucket. On first
+    /// use the bucket PDA is allocated and the mask becomes the initial
+    /// bitmap; on subsequent calls the mask is OR'd into the existing bitmap.
+    /// Bits are never cleared — this is the safety invariant that lets the
+    /// bulk backfill path coexist with the operational `MarkUsed` path.
+    pub fn process(&self, program_id: &Address) -> ProgramResult {
+        let pda_seeds =
+            BitmapPdaSeeds::from_bucket_index(self.data.namespace, self.data.bucket_index);
+
+        verify_bitmap_pda_and_init_if_needed(
+            self.accounts.payer,
+            self.accounts.authority,
+            self.accounts.bitmap_pda,
+            &pda_seeds,
+            program_id,
+        )?;
+
+        // SAFETY: We have exclusive write access to the PDA data after
+        // creation/validation. The init call above ensures the account is
+        // valid and owned by this program.
+        let account_data = unsafe { self.accounts.bitmap_pda.borrow_unchecked_mut() };
+        let bitmap =
+            BitmapAccount::from_slice(account_data).ok_or(ProgramError::AccountDataTooSmall)?;
+
+        // OR-only: every byte gets bits added, never cleared.
+        for (dst, src) in bitmap.bitmap.iter_mut().zip(self.data.or_mask.iter()) {
+            *dst |= *src;
+        }
 
         Ok(())
     }
