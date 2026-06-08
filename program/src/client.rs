@@ -194,7 +194,101 @@ impl MarkUsed<'_> {
     }
 }
 
+/// Derive the bitmap PDA for a given authority, namespace, and bucket index.
+///
+/// Equivalent to `derive_bitmap_pda(authority, namespace, bucket_index * BITS_PER_BUCKET)`
+/// but accepts bucket indices that would overflow `u64` if expressed as a sequence.
+pub fn derive_bitmap_pda_for_bucket(
+    authority: &Pubkey,
+    namespace: &[u8],
+    bucket_index: u64,
+) -> (Pubkey, u8) {
+    let bucket_bytes = bucket_index.to_le_bytes();
+    let mid = namespace.len().min(SEED_CHUNK_SIZE);
+
+    let seeds: [&[u8]; 4] = [
+        authority.as_ref(),
+        &namespace[..mid],
+        &namespace[mid..],
+        &bucket_bytes,
+    ];
+
+    Pubkey::find_program_address(&seeds, &PROGRAM_ID)
+}
+
+/// Build instruction data for `MarkUsedBulk`.
+///
+/// Wire format: `[disc][ns_len: u16 LE][ns][bucket_index: u64 LE][or_mask: 128 B]`.
+pub fn build_mark_used_bulk_data(
+    namespace: &[u8],
+    bucket_index: u64,
+    or_mask: &[u8; crate::instruction::MARK_USED_BULK_MASK_LEN],
+) -> Vec<u8> {
+    let namespace_len = namespace.len() as u16;
+    let mut data = Vec::with_capacity(
+        1 + 2 + namespace.len() + 8 + crate::instruction::MARK_USED_BULK_MASK_LEN,
+    );
+    data.push(crate::instruction::MARK_USED_BULK);
+    data.extend_from_slice(&namespace_len.to_le_bytes());
+    data.extend_from_slice(namespace);
+    data.extend_from_slice(&bucket_index.to_le_bytes());
+    data.extend_from_slice(or_mask);
+    data
+}
+
+/// Builder for the MarkUsedBulk instruction.
+///
+/// OR-merges a 128-byte mask into a single bucket. Account layout, signer
+/// requirements, and PDA derivation match `MarkUsed`; the data carries an
+/// explicit `bucket_index` and a 128-byte mask instead of a single sequence.
+/// Bits are OR'd in and never cleared.
+///
+/// # Accounts
+///
+/// 1. `[signer, writable]` Payer - pays for PDA creation if needed
+/// 2. `[signer]` Authority - must sign; goes into PDA seeds
+/// 3. `[writable]` Bitmap PDA
+/// 4. `[]` System program
+pub struct MarkUsedBulk<'a> {
+    /// Account that pays for PDA creation (if needed).
+    pub payer: &'a Pubkey,
+    /// Authority that owns the replay protection namespace (MUST sign).
+    pub authority: &'a Pubkey,
+    /// Application-specific namespace (max 64 bytes).
+    pub namespace: &'a [u8],
+    /// Bucket index (i.e. `sequence / BITS_PER_BUCKET`).
+    pub bucket_index: u64,
+    /// 128-byte mask to OR into the bucket bitmap.
+    pub or_mask: &'a [u8; crate::instruction::MARK_USED_BULK_MASK_LEN],
+}
+
+impl MarkUsedBulk<'_> {
+    /// Build the MarkUsedBulk instruction.
+    pub fn instruction(&self) -> Instruction {
+        let (pda, _bump) =
+            derive_bitmap_pda_for_bucket(self.authority, self.namespace, self.bucket_index);
+
+        Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(*self.payer, true),
+                AccountMeta::new_readonly(*self.authority, true),
+                AccountMeta::new(pda, false),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            data: build_mark_used_bulk_data(self.namespace, self.bucket_index, self.or_mask),
+        }
+    }
+
+    /// Get the PDA that will be used/created.
+    pub fn pda(&self) -> (Pubkey, u8) {
+        derive_bitmap_pda_for_bucket(self.authority, self.namespace, self.bucket_index)
+    }
+}
+
 // Re-export useful constants for clients
-pub use crate::instruction::{CREATE_BITMAP, MARK_USED, UNMARK_USED};
-pub use crate::state::{BITMAP_ACCOUNT_SIZE, BITS_PER_BUCKET};
+pub use crate::instruction::{
+    CREATE_BITMAP, MARK_USED, MARK_USED_BULK, MARK_USED_BULK_MASK_LEN, UNMARK_USED,
+};
+pub use crate::state::{BITMAP_ACCOUNT_SIZE, BITMAP_BYTES, BITS_PER_BUCKET};
 pub use crate::MAX_NAMESPACE_LEN;
