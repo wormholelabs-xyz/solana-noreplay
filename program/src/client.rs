@@ -219,14 +219,11 @@ pub fn build_mark_used_bulk_data(
     bucket_index: u64,
     or_mask: &[u8; crate::instruction::MARK_USED_BULK_MASK_LEN],
 ) -> Vec<u8> {
-    let namespace_len = namespace.len() as u16;
-    let mut data = Vec::with_capacity(
-        1 + 2 + namespace.len() + 8 + crate::instruction::MARK_USED_BULK_MASK_LEN,
-    );
-    data.push(crate::instruction::MARK_USED_BULK);
-    data.extend_from_slice(&namespace_len.to_le_bytes());
-    data.extend_from_slice(namespace);
-    data.extend_from_slice(&bucket_index.to_le_bytes());
+    // The prefix is identical to the single-sequence layout, with bucket_index
+    // occupying the u64 slot; only the trailing OR-mask is bulk-specific.
+    let mut data =
+        build_instruction_data(crate::instruction::MARK_USED_BULK, namespace, bucket_index);
+    data.reserve(crate::instruction::MARK_USED_BULK_MASK_LEN);
     data.extend_from_slice(or_mask);
     data
 }
