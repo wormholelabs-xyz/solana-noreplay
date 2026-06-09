@@ -38,20 +38,15 @@ const SEED_CHUNK_SIZE: usize = 32;
 
 /// Derive the bitmap PDA for a given authority, namespace, and sequence.
 ///
-/// Seeds are always: `[authority, ns_chunk_0, ns_chunk_1, bucket_index]`
+/// Seeds are always: `[authority, ns_chunk_0, ns_chunk_1, bucket_index]`.
+/// Delegates to [`derive_bitmap_pda_for_bucket`] so the seed layout has a
+/// single source of truth.
 pub fn derive_bitmap_pda(authority: &Pubkey, namespace: &[u8], sequence: u64) -> (Pubkey, u8) {
-    let bucket_index = sequence / crate::state::BITS_PER_BUCKET;
-    let bucket_bytes = bucket_index.to_le_bytes();
-    let mid = namespace.len().min(SEED_CHUNK_SIZE);
-
-    let seeds: [&[u8]; 4] = [
-        authority.as_ref(),
-        &namespace[..mid],
-        &namespace[mid..],
-        &bucket_bytes,
-    ];
-
-    Pubkey::find_program_address(&seeds, &PROGRAM_ID)
+    derive_bitmap_pda_for_bucket(
+        authority,
+        namespace,
+        sequence / crate::state::BITS_PER_BUCKET,
+    )
 }
 
 /// Build instruction data for namespace + sequence.
