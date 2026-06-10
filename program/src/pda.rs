@@ -27,10 +27,18 @@ pub struct BitmapPdaSeeds<'a> {
 impl<'a> BitmapPdaSeeds<'a> {
     /// Compute seed components from namespace and sequence.
     pub fn new(namespace: &'a [u8], sequence: u64) -> Self {
+        Self::from_bucket_index(namespace, sequence / BITS_PER_BUCKET)
+    }
+
+    /// Compute seed components from namespace and an explicit bucket index.
+    ///
+    /// Used by the bulk instruction, which receives the bucket index directly
+    /// rather than deriving it from a single sequence number.
+    pub fn from_bucket_index(namespace: &'a [u8], bucket_index: u64) -> Self {
         let mid = namespace.len().min(SEED_CHUNK_SIZE);
         Self {
             ns_chunks: [&namespace[..mid], &namespace[mid..]],
-            bucket_bytes: (sequence / BITS_PER_BUCKET).to_le_bytes(),
+            bucket_bytes: bucket_index.to_le_bytes(),
         }
     }
 

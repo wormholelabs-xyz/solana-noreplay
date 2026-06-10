@@ -2,8 +2,9 @@ use solana_sdk::rent::Rent;
 
 // Re-export from the program's client module
 pub use solana_noreplay::client::{
-    build_instruction_data, derive_bitmap_pda, CreateBitmap, MarkUsed, BITMAP_ACCOUNT_SIZE,
-    BITS_PER_BUCKET, CREATE_BITMAP, MARK_USED, MAX_NAMESPACE_LEN, PROGRAM_ID, UNMARK_USED,
+    build_instruction_data, derive_bitmap_pda, derive_bitmap_pda_for_bucket, CreateBitmap,
+    MarkUsed, MarkUsedBulk, BITMAP_ACCOUNT_SIZE, BITMAP_BYTES, BITS_PER_BUCKET, CREATE_BITMAP,
+    MARK_USED, MARK_USED_BULK, MARK_USED_BULK_MASK_LEN, MAX_NAMESPACE_LEN, PROGRAM_ID, UNMARK_USED,
 };
 
 pub fn load_program() -> Vec<u8> {
@@ -999,6 +1000,144 @@ mod tests {
             result.is_ok(),
             "Should work with separate payer and authority: {:?}",
             result
+        );
+    }
+
+    // ============================================================================
+    // MarkUsedBulk tests
+    // ============================================================================
+
+    /// Helper: send a `MarkUsedBulk` ix in a single-payer/authority transaction.
+    #[allow(clippy::result_large_err)]
+    fn send_mark_used_bulk(
+        svm: &mut LiteSVM,
+        authority: &Keypair,
+        namespace: &[u8],
+        bucket_index: u64,
+        or_mask: &[u8; MARK_USED_BULK_MASK_LEN],
+    ) -> Result<litesvm::types::TransactionMetadata, litesvm::types::FailedTransactionMetadata>
+    {
+        let ix = MarkUsedBulk {
+            payer: &authority.pubkey(),
+            authority: &authority.pubkey(),
+            namespace,
+            bucket_index,
+            or_mask,
+        }
+        .instruction();
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&authority.pubkey()),
+            &[authority],
+            blockhash,
+        );
+        svm.send_transaction(tx)
+    }
+
+    /// Build a 128-byte mask with the given bit indices set.
+    fn mask_with_bits(bits: &[usize]) -> [u8; MARK_USED_BULK_MASK_LEN] {
+        let mut mask = [0u8; MARK_USED_BULK_MASK_LEN];
+        for &bit in bits {
+            mask[bit / 8] |= 1 << (bit % 8);
+        }
+        mask
+    }
+
+    #[test]
+    fn mark_used_bulk_or_masks_into_bucket() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+        let bucket_index = 7u64;
+        let (pda, expected_bump) =
+            derive_bitmap_pda_for_bucket(&authority.pubkey(), namespace, bucket_index);
+
+        // First call: scattered bits, allocates the bucket.
+        let mask1 = mask_with_bits(&[0, 5, 17, 200, 1023]);
+        send_mark_used_bulk(&mut svm, &authority, namespace, bucket_index, &mask1)
+            .expect("first MarkUsedBulk should succeed");
+
+        let account = svm.get_account(&pda).expect("bucket PDA should exist");
+        assert_eq!(
+            account.data.len(),
+            BITMAP_ACCOUNT_SIZE,
+            "PDA must be allocated to canonical size"
+        );
+        assert_eq!(account.data[0], expected_bump, "bump byte mismatch");
+        assert_eq!(&account.data[1..], &mask1, "bitmap must equal initial mask");
+
+        svm.expire_blockhash();
+
+        // Second call: overlapping and new bits.
+        let mask2 = mask_with_bits(&[5, 6, 17, 18, 512]);
+        send_mark_used_bulk(&mut svm, &authority, namespace, bucket_index, &mask2)
+            .expect("second MarkUsedBulk should succeed");
+
+        let account = svm.get_account(&pda).expect("bucket PDA should exist");
+        let mut expected = [0u8; BITMAP_BYTES];
+        for i in 0..BITMAP_BYTES {
+            expected[i] = mask1[i] | mask2[i];
+        }
+        assert_eq!(account.data[0], expected_bump, "bump byte must persist");
+        assert_eq!(
+            &account.data[1..],
+            &expected,
+            "bitmap must be the OR of all masks applied"
+        );
+    }
+
+    #[test]
+    fn mark_used_bulk_cannot_clear_set_bits() {
+        let mut svm = LiteSVM::new();
+        svm.add_program(PROGRAM_ID, &load_program());
+
+        let authority = Keypair::new();
+        svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let namespace = b"test";
+        let bucket_index = 0u64;
+        let (pda, _bump) =
+            derive_bitmap_pda_for_bucket(&authority.pubkey(), namespace, bucket_index);
+
+        // Set bit 5 only.
+        let first_mask = mask_with_bits(&[5]);
+        send_mark_used_bulk(&mut svm, &authority, namespace, bucket_index, &first_mask)
+            .expect("first MarkUsedBulk should succeed");
+
+        let account = svm.get_account(&pda).expect("bucket PDA should exist");
+        assert_eq!(
+            account.data[1] & 0b0010_0000,
+            0b0010_0000,
+            "bit 5 should be set after first call"
+        );
+
+        svm.expire_blockhash();
+
+        // All-zero mask must not clear bit 5.
+        let zero_mask = [0u8; MARK_USED_BULK_MASK_LEN];
+        send_mark_used_bulk(&mut svm, &authority, namespace, bucket_index, &zero_mask)
+            .expect("zero-mask MarkUsedBulk should succeed");
+
+        let account = svm.get_account(&pda).expect("bucket PDA should exist");
+        assert_eq!(
+            account.data[1] & 0b0010_0000,
+            0b0010_0000,
+            "bit 5 must remain set after zero-mask call (OR-only invariant)"
+        );
+        // All other bits should still be zero.
+        let mut expected = [0u8; BITMAP_BYTES];
+        expected[0] = 0b0010_0000;
+        assert_eq!(
+            &account.data[1..],
+            &expected,
+            "no other bits should have flipped"
         );
     }
 }
