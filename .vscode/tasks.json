@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install pinned VS Code extensions",
+      "type": "shell",
+      "command": "[ \"$DEVCONTAINER\" = 'true' ] || exit 0; for vsix in /opt/vscode-extensions/*.vsix; do code --install-extension \"$vsix\" --force; done",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    }
+  ]
+}

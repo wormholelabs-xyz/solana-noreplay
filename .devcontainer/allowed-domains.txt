@@ -1,8 +1,59 @@
+# Egress allow-list for the castellan DNS firewall.
+#
+# Each line's type is determined by its prefix (checked exact -> suffix -> wildcard -> regex):
+#
+#   api.anthropic.com                              exact host (case-insensitive)
+#   .sentry.io                                     suffix: matches sentry.io AND any subdomain *.sentry.io
+#   *.gallery.vsassets.io                          wildcard: any subdomain (one or more labels) of the suffix
+#   re:^[a-z0-9-]+\.pkg\.dev$                      regex matched against the whole lowercased name
+#   JsonList(https://example.com/ips, [key1, key2])        fetch JSON; keys are top-level string arrays
+#   JsonList(https://example.com/ips, [arr[].field])        fetch JSON; keys traverse array-of-objects
+#
+# Blank lines and everything after `#` are ignored.
+#
+# The allow-list is baked into the image at build time — edits here require a devcontainer
+# rebuild to take effect. Validate changes with: castellan check
+
+# GitHub — git/gh/clone over HTTPS. The published IP ranges are seeded into the static
+# allow-sets via JsonList below; the names must also be listed so the resolver answers them.
+JsonList(https://api.github.com/meta, [web, api, git])
+.github.com
+.githubusercontent.com
+.githubassets.com
+.ghcr.io
+
 # Claude Required
 registry.npmjs.org
 api.anthropic.com
-sentry.io
+.sentry.io
 statsig.anthropic.com
 statsig.com
+platform.claude.com
+downloads.claude.ai
 
 # Repo Specific
+
+# Rust crate registry — cargo build/test/bench fetching dependencies at runtime
+# (the Docker build stages use BuildKit cache mounts, but interactive cargo runs
+# inside the devcontainer hit these directly).
+crates.io
+static.crates.io
+index.crates.io
+static.rust-lang.org
+
+# Solana (agave) CLI installer — used by `just setup` / `make setup` to (re)install
+# the toolchain version pinned in .solana-version.
+release.anza.xyz
+
+# Solana cluster RPC endpoints and faucet — used by scripts/deploy.sh and
+# `solana balance` / `solana program show` when run inside the devcontainer.
+api.devnet.solana.com
+api.testnet.solana.com
+api.mainnet-beta.solana.com
+faucet.solana.com
+
+# VS Code Marketplace — only needed to run fetch-vscode-extension-shas.sh from
+# inside the container (image-build extension downloads are not firewalled).
+# Safe to remove if you run that maintenance script on the host instead.
+marketplace.visualstudio.com
+*.gallery.vsassets.io
