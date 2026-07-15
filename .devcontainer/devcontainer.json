@@ -4,7 +4,6 @@
     "dockerfile": "Dockerfile",
     "context": "..",
     "target": "devcontainer",
-    "options": ["--platform=linux/amd64"],
     "args": {
       "TZ": "${localEnv:TZ:America/Los_Angeles}",
       "CLAUDE_CODE_VERSION": "2.1.198",
@@ -29,7 +28,6 @@
     }
   },
   "runArgs": [
-    "--platform=linux/amd64",
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW",
     "--sysctl=net.ipv4.conf.all.route_localnet=1"
