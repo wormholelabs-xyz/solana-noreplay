@@ -2,24 +2,44 @@
   "name": "Claude Code Sandbox",
   "build": {
     "dockerfile": "Dockerfile",
+    "context": "..",
     "target": "devcontainer",
     "options": ["--platform=linux/amd64"],
     "args": {
       "TZ": "${localEnv:TZ:America/Los_Angeles}",
-      "CLAUDE_CODE_VERSION": "latest",
+      "CLAUDE_CODE_VERSION": "2.1.198",
+      "CLAUDE_CODE_CHECKSUM_AMD64": "7066af42a5fe93038c13af5072d4c034dc3928092cb121fdd892c76b94b6b84d",
+      "CLAUDE_CODE_CHECKSUM_ARM64": "99b50a6f2b1f3ef07bcaf1e58a2f9883c470c84e428afa321972b1aa20372e9a",
       "GIT_DELTA_VERSION": "0.18.2",
-      "ZSH_IN_DOCKER_VERSION": "1.2.0"
+      "GIT_DELTA_CHECKSUM_AMD64": "1658c7b61825d411b50734f34016101309e4b6e7f5799944cf8e4ac542cebd7f",
+      "GIT_DELTA_CHECKSUM_ARM64": "937781aa7788e1510858743fff6c9a8b4a69fe0a22a7c8a69493e633227939a9",
+      "CASTELLAN_VERSION": "0.2.0",
+      "CASTELLAN_CHECKSUM_AMD64": "85b112642d56d3faa1aba48905a48b4e842e74741580a1d716e7a7b185ec9156",
+      "CASTELLAN_CHECKSUM_ARM64": "ca1cce6df1adc128140cfab0a0fd3446b152ee5a533ee5d5ca3c9c90da0b0660",
+      "OHMYZSH_COMMIT": "c954bbb168fc645592c50017de0d0e138db8df5f",
+      "POWERLEVEL10K_COMMIT": "35833ea15f14b71dbcebc7e54c104d8d56ca5268",
+      "CLAUDE_CODE_EXT_VERSION": "2.1.198",
+      "CLAUDE_CODE_EXT_SHA256": "amd64=d22480d9c934b4974e8a20e5870a7b5daa980c5100319c88f6600b22f603e99c,arm64=df974c380afda5bed36f9824883a762b4c5da1d19db8e11c27d20549e9c3d37b",
+      "ESLINT_EXT_VERSION": "3.0.24",
+      "ESLINT_EXT_SHA256": "650573a5248b7f7b693b842d2e36c23a37b72f9fc4ab34fd03d20eb2c97a7b9e",
+      "PRETTIER_EXT_VERSION": "12.4.0",
+      "PRETTIER_EXT_SHA256": "46d22a567b35ebe5bdffd7280457742cd67e65d7e1b250bb775ab2be86479a42",
+      "GITLENS_EXT_VERSION": "17.12.2",
+      "GITLENS_EXT_SHA256": "857a4696706b6683a79410770f2744027a79cd1327a56b89d4f304993cc9aaaa"
     }
   },
-  "runArgs": ["--platform=linux/amd64", "--cap-add=NET_ADMIN", "--cap-add=NET_RAW"],
+  "runArgs": [
+    "--platform=linux/amd64",
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--sysctl=net.ipv4.conf.all.route_localnet=1"
+  ],
   "customizations": {
     "vscode": {
-      "extensions": [
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode",
-        "eamodio.gitlens"
-      ],
+      "extensions": [],
       "settings": {
+        "extensions.autoUpdate": false,
+        "extensions.autoCheckUpdates": false,
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "esbenp.prettier-vscode",
         "editor.codeActionsOnSave": {
@@ -43,17 +63,17 @@
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config,target=/home/node/.claude,type=volume",
     "source=solana-cache,target=/home/node/.cache/solana,type=volume",
-    "source=cargo-registry,target=/home/node/.cargo/registry,type=volume",
-    "source=/dev/null,target=/workspace/.env.development,type=bind,consistency=delegated",
-    "source=/dev/null,target=/workspace/.env.test,type=bind,consistency=delegated",
-    "source=/dev/null,target=/workspace/.env,type=bind,consistency=delegated"
+    "source=cargo-registry,target=/home/node/.cargo/registry,type=volume"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
-    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/${localWorkspaceFolderBasename},type=bind,consistency=delegated",
   "workspaceFolder": "/workspace/${localWorkspaceFolderBasename}",
-  "postCreateCommand": "claude update && sudo /usr/local/bin/init-firewall.sh"
+  "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
 }
