@@ -3,6 +3,7 @@ FROM debian:bookworm-slim@sha256:4724b8cc51e33e398f0e2e15e18d5ec2851ff0c2280647e
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl \
   unzip \
+  bzip2 \
   git \
   ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -115,6 +116,33 @@ ARG GITLENS_EXT_SHA256
 RUN download-vsix.sh eamodio gitlens "${GITLENS_EXT_VERSION}" "${GITLENS_EXT_SHA256}"
 
 # =============================================================================
+# Stage: Download and verify the Solana CLI (agave)
+# amd64 uses the official anza-xyz/agave release; anza doesn't publish a
+# linux-aarch64 build, so arm64 uses the wormholelabs-xyz/agave fork's build for
+# that target instead. Both are checksum-verified. The version comes from
+# .solana-version (single source of truth). Regenerate the checksums when bumping
+# it by downloading each tarball and running sha256sum on it.
+# =============================================================================
+FROM downloader AS solana
+ARG SOLANA_FALLBACK_REPO=wormholelabs-xyz/agave
+ARG SOLANA_CHECKSUM_AMD64=06f97c065cc977cbec2f13ffc9bc9d3b92fef485431fcb370a269de69532ef51
+ARG SOLANA_CHECKSUM_ARM64=1c226ddf2066d5e19c5ca1370b168269ea7ee9923a4c759093be63b7699d4e8c
+COPY .solana-version /tmp/.solana-version
+RUN SOLANA_VERSION="$(cat /tmp/.solana-version)" && \
+  ARCH=$(dpkg --print-architecture) && \
+  if [ "${ARCH}" = "amd64" ]; then \
+    URL="https://release.anza.xyz/v${SOLANA_VERSION}/solana-release-x86_64-unknown-linux-gnu.tar.bz2"; \
+    CHECKSUM="${SOLANA_CHECKSUM_AMD64}"; \
+  else \
+    URL="https://github.com/${SOLANA_FALLBACK_REPO}/releases/download/v${SOLANA_VERSION}/solana-release-aarch64-unknown-linux-gnu.tar.bz2"; \
+    CHECKSUM="${SOLANA_CHECKSUM_ARM64}"; \
+  fi && \
+  curl -fsSLo /tmp/solana-release.tar.bz2 "${URL}" && \
+  echo "${CHECKSUM}  /tmp/solana-release.tar.bz2" | sha256sum -c - && \
+  mkdir -p /opt/solana && \
+  tar -xjf /tmp/solana-release.tar.bz2 -C /opt/solana
+
+# =============================================================================
 # solana-dev: base stage with the Rust + Solana (agave) toolchain
 # =============================================================================
 FROM node:24@sha256:bb20cf73b3ad7212834ec48e2174cdcb5775f6550510a5336b842ae32741ce6c AS solana-dev
@@ -147,9 +175,16 @@ USER node
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/node/.cargo/bin:$PATH"
 
-# Install Solana CLI (agave) - version from .solana-version file
-COPY .solana-version /tmp/.solana-version
-RUN sh -c "$(curl -sSfL https://release.anza.xyz/v$(cat /tmp/.solana-version)/install)"
+# Install Solana CLI (agave) from the checksum-verified `solana` download stage.
+# Lay it out in the release layout the anza installer uses (versioned release dir
+# + active_release symlink), with the version read from .solana-version.
+COPY --from=solana --chown=node:node /opt/solana/solana-release /tmp/solana-release
+COPY --chown=node:node .solana-version /tmp/.solana-version
+RUN SOLANA_VERSION="$(cat /tmp/.solana-version)" && \
+  mkdir -p "/home/node/.local/share/solana/install/releases/${SOLANA_VERSION}" && \
+  mv /tmp/solana-release "/home/node/.local/share/solana/install/releases/${SOLANA_VERSION}/solana-release" && \
+  ln -sf "/home/node/.local/share/solana/install/releases/${SOLANA_VERSION}/solana-release" \
+    /home/node/.local/share/solana/install/active_release
 ENV PATH="/home/node/.local/share/solana/install/active_release/bin:$PATH"
 
 # Pre-warm Solana SBF build cache
