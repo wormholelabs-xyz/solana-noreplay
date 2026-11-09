@@ -145,7 +145,7 @@ RUN SOLANA_VERSION="$(cat /tmp/.solana-version)" && \
 # =============================================================================
 # solana-dev: base stage with the Rust + Solana (agave) toolchain
 # =============================================================================
-FROM node:24@sha256:bb20cf73b3ad7212834ec48e2174cdcb5775f6550510a5336b842ae32741ce6c AS solana-dev
+FROM node:24@sha256:8fa96264f302f58bbb13aa7339c541547b56975766ce956c875da149452a3e40 AS solana-dev
 
 ARG TZ
 ENV TZ="$TZ"
