@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn lamports_cost_is_rent_exempt_minimum() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         let initial_balance = 10 * LAMPORTS_PER_SOL;
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn works_when_pda_prefunded() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         let attacker = Keypair::new();
@@ -162,7 +162,7 @@ mod tests {
         #[test]
         fn replay_protection_prevents_reuse(sequence: u64) {
             let mut svm = LiteSVM::new();
-            svm.add_program(PROGRAM_ID, &load_program());
+            svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
             let authority = Keypair::new();
             let namespace = b"test";
@@ -212,7 +212,7 @@ mod tests {
             prop_assume!(seq1 != seq2);
 
             let mut svm = LiteSVM::new();
-            svm.add_program(PROGRAM_ID, &load_program());
+            svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
             let authority = Keypair::new();
             let namespace = b"test";
@@ -260,7 +260,7 @@ mod tests {
         #[test]
         fn incremental_sequences_all_work(base in 0u64..u64::MAX - 10) {
             let mut svm = LiteSVM::new();
-            svm.add_program(PROGRAM_ID, &load_program());
+            svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
             let authority = Keypair::new();
             let namespace = b"test";
@@ -317,7 +317,7 @@ mod tests {
         #[test]
         fn different_authorities_are_independent(sequence: u64) {
             let mut svm = LiteSVM::new();
-            svm.add_program(PROGRAM_ID, &load_program());
+            svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
             let authority1 = Keypair::new();
             let authority2 = Keypair::new();
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn different_namespaces_are_independent() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn empty_namespace_works() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn short_namespace_works() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn long_namespace_works() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn max_namespace_length_works() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn namespace_too_long_fails() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -596,7 +596,7 @@ mod tests {
     #[test]
     fn authority_must_be_signer() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let payer = Keypair::new();
         let authority = Keypair::new(); // Authority that won't sign
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn unmark_clears_previously_marked_bit() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -739,7 +739,7 @@ mod tests {
     #[test]
     fn unmark_on_already_clear_bit_returns_not_modified() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn unmark_requires_authority_signature() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let payer = Keypair::new();
         let authority = Keypair::new();
@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn unmark_idempotent() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn unmark_does_not_affect_other_bits() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -970,7 +970,7 @@ mod tests {
     #[test]
     fn separate_payer_and_authority_works() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let payer = Keypair::new();
         let authority = Keypair::new();
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn mark_used_bulk_or_masks_into_bucket() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)
@@ -1095,7 +1095,7 @@ mod tests {
     #[test]
     fn mark_used_bulk_cannot_clear_set_bits() {
         let mut svm = LiteSVM::new();
-        svm.add_program(PROGRAM_ID, &load_program());
+        svm.add_program(PROGRAM_ID, &load_program()).unwrap();
 
         let authority = Keypair::new();
         svm.airdrop(&authority.pubkey(), 10 * LAMPORTS_PER_SOL)

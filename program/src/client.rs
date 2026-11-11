@@ -27,8 +27,8 @@
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    system_program,
 };
+use solana_sdk_ids::system_program;
 
 /// Program ID for the NoReplay program (set via `NOREPLAY_PROGRAM_ID` env var at compile time).
 pub const PROGRAM_ID: Pubkey = Pubkey::from_str_const(env!("NOREPLAY_PROGRAM_ID"));
