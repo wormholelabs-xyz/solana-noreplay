@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-litesvm = "0.6"
+litesvm = "0.7"
 solana-sdk = "2.2"
 solana-noreplay = { path = "../program", features = ["client"] }
 proptest = "1.6"
